@@ -1,0 +1,1 @@
+{% extends 'core/base.html' %}{% block content %}<a href="{% url 'courses' %}">← Все курсы</a><h1>{{ direction.title }}</h1><p class="muted">{{ direction.description }}</p><div class="card"><h2>Курсы</h2>{% for course in direction.courses.all %}<p><a href="{% url 'course' course.id %}">{{ course.title }}</a></p>{% empty %}<p>Курсов пока нет.</p>{% endfor %}</div>{% endblock %}

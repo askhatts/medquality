@@ -1,0 +1,24 @@
+services:
+  quality:
+    build: .
+    container_name: quality_app
+    restart: unless-stopped
+    environment:
+      DJANGO_DEBUG: "0"
+      DJANGO_SECRET_KEY: "${DJANGO_SECRET_KEY}"
+      DJANGO_ALLOWED_HOSTS: "oncomap-abai.kz,www.oncomap-abai.kz"
+      DJANGO_CSRF_TRUSTED_ORIGINS: "https://oncomap-abai.kz,https://www.oncomap-abai.kz"
+      USE_SQLITE: "1"
+      SQLITE_PATH: "/data/db.sqlite3"
+      MEDIA_ROOT: "/data/media"
+    command: sh -c "python manage.py migrate --noinput && python manage.py collectstatic --noinput && gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 2 --timeout 60"
+    volumes:
+      - ./data:/data
+    networks:
+      - onco
+    mem_limit: 320m
+
+networks:
+  onco:
+    external: true
+    name: deploy_default

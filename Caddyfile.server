@@ -1,0 +1,51 @@
+# Caddy: автоматический HTTPS (Let's Encrypt) + пароль на ВЕСЬ сайт.
+# Медицинская статистика не индексируется и не видна случайным посетителям.
+# Значения берутся из переменных окружения (см. .env / docker-compose.yml).
+
+{
+	email {$ACME_EMAIL}
+}
+
+{$SITE_DOMAIN} {
+	encode zstd gzip
+
+	# Портал заявок имеет собственный вход в приложение и доступен по /applications/.
+	handle_path /applications* {
+		reverse_proxy requests_app:8000 {
+			header_up X-Forwarded-Prefix /applications
+		}
+	}
+
+	# Портал тестирования и обучения сохраняет собственный префикс /quality/.
+	handle /quality* {
+		reverse_proxy quality_app:8000
+	}
+
+	# Онко-ГИС и все его данные доступны только после входа.
+	@oncogis path /app /app/* /app.html /app.js /app.jsx /vendor/* /api/* /*.json /*.geojson
+	handle @oncogis {
+		basic_auth bcrypt "Онко-ГИС" {
+			{$BASIC_AUTH_USER} {$BASIC_AUTH_HASH}
+		}
+
+		reverse_proxy backend:8000
+	}
+
+	# Главная страница и другие будущие приложения доступны без Basic Auth.
+	handle {
+		reverse_proxy backend:8000
+	}
+
+	# Не индексировать поисковиками (дополнительно к паролю).
+	header {
+		X-Robots-Tag "noindex, nofollow"
+		-Server
+	}
+
+	log {
+		output file /data/access.log {
+			roll_size 10mb
+			roll_keep 5
+		}
+	}
+}

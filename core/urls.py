@@ -1,0 +1,41 @@
+from django.urls import path
+
+from . import views
+
+
+urlpatterns = [
+    path('', views.dashboard, name='dashboard'),
+    path('login/', views.login_view, name='login'),
+    path('logout/', views.logout_view, name='logout'),
+    path('session/ping/', views.session_ping, name='session_ping'),
+    path('password/', views.change_password, name='password'),
+    path('directions/', views.directions, name='directions'),
+    path('directions/<int:pk>/', views.direction_detail, name='direction'),
+    path('courses/', views.courses, name='courses'),
+    path('courses/manage/', views.course_manage, name='course_manage'),
+    path('courses/manage/new/', views.course_form, name='course_new'),
+    path('courses/manage/<int:pk>/edit/', views.course_form, name='course_edit'),
+    path('courses/manage/<int:course_id>/content/', views.course_content, name='course_content'),
+    path('courses/<int:course_id>/lessons/new/', views.lesson_create, name='lesson_create'),
+    path('courses/<int:course_id>/documents/link/', views.course_document_link, name='course_document_link'),
+    path('courses/<int:course_id>/documents/<int:document_id>/unlink/', views.course_document_unlink, name='course_document_unlink'),
+    path('lessons/<int:pk>/delete/', views.lesson_delete, name='lesson_delete'),
+    path('lessons/<int:pk>/edit/', views.lesson_edit, name='lesson_edit'),
+    path('courses/<int:course_id>/test-editor/', views.test_editor, name='test_editor'),
+    path('courses/<int:course_id>/test-preview/', views.test_preview, name='test_preview'),
+    path('questions/<int:pk>/delete/', views.question_delete, name='question_delete'),
+    path('courses/<int:pk>/', views.course_detail, name='course'),
+    path('assignments/<int:pk>/acknowledge/', views.acknowledge, name='acknowledge'),
+    path('tests/<int:pk>/', views.take_test, name='test'),
+    path('employees/', views.employees, name='employees'),
+    path('employees/new/', views.employee_form, name='employee_new'),
+    path('employees/<int:pk>/', views.employee_form, name='employee_edit'),
+    path('assignments/', views.assignment_list, name='assignments'),
+    path('assignments/new/', views.create_assignment, name='assignment_new'),
+    path('reports/', views.reports, name='reports'),
+    path('reports/excel/', views.report_excel, name='report_excel'),
+    path('documents/', views.document_bank, name='document_bank'),
+    path('documents/new/', views.document_form, name='document_new'),
+    path('documents/<int:pk>/edit/', views.document_form, name='document_edit'),
+    path('media/<path:path>', views.media_file, name='media_file'),
+]
