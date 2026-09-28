@@ -447,10 +447,12 @@ def create_assignment(request):
     if request.method!='POST': return redirect('assignments')
     course=get_object_or_404(Course,pk=request.POST['course']); test=current_test(course,True)
     if not test: return HttpResponse('Сначала опубликуйте итоговый тест курса.',status=409)
-    due=datetime.strptime(request.POST['due_date'],'%Y-%m-%d').date(); user_ids=set(request.POST.getlist('users')); department_ids=request.POST.getlist('departments')
+    due=datetime.strptime(request.POST['due_date'],'%Y-%m-%d').date()
+    due_time=datetime.strptime(request.POST.get('due_time') or '23:59','%H:%M').time()
+    user_ids=set(request.POST.getlist('users')); department_ids=request.POST.getlist('departments')
     user_ids.update(Profile.objects.filter(department_id__in=department_ids,user__is_active=True).values_list('user_id',flat=True))
     if not user_ids: return HttpResponse('Выберите хотя бы один отдел или одного сотрудника.',status=400)
-    values={'due_date':due,'passing_score':int(request.POST['passing_score']),'attempts_allowed':int(request.POST['attempts_allowed']),'test_version':test}
+    values={'due_date':due,'due_time':due_time,'passing_score':int(request.POST['passing_score']),'attempts_allowed':int(request.POST['attempts_allowed']),'test_version':test}
     for user_id in user_ids:
         active=Assignment.objects.filter(user_id=user_id,course=course,status__in=('ASSIGNED','IN_PROGRESS','OVERDUE')).first()
         if active:
@@ -476,6 +478,6 @@ def report_excel(request):
     for a in filtered_assignments(request):
         p=a.user.profile
         for attempt in list(a.attempts.all()) or [None]:
-            ws.append([a.id,a.user.get_full_name() or a.user.username,str(p.employee_type or ''),str(p.department or ''),p.position,a.course.direction.title,a.course.title,a.test_version.version if a.test_version else '',timezone.localtime(a.assigned_at).strftime('%d.%m.%Y %H:%M'),a.due_date.strftime('%d.%m.%Y'),timezone.localtime(a.acknowledged_at).strftime('%d.%m.%Y %H:%M') if a.acknowledged_at else '',attempt.number if attempt else '',timezone.localtime(attempt.completed_at).strftime('%d.%m.%Y %H:%M') if attempt else '',attempt.correct_answers if attempt else '',attempt.score if attempt else '',('Пройден' if attempt.passed else 'Не пройден') if attempt else '',a.get_status_display(),timezone.localtime(a.completed_at).strftime('%d.%m.%Y %H:%M') if a.completed_at else '','Да' if a.is_demo else 'Нет'])
+            ws.append([a.id,a.user.get_full_name() or a.user.username,str(p.employee_type or ''),str(p.department or ''),p.position,a.course.direction.title,a.course.title,a.test_version.version if a.test_version else '',timezone.localtime(a.assigned_at).strftime('%d.%m.%Y %H:%M'),timezone.localtime(a.deadline).strftime('%d.%m.%Y %H:%M'),timezone.localtime(a.acknowledged_at).strftime('%d.%m.%Y %H:%M') if a.acknowledged_at else '',attempt.number if attempt else '',timezone.localtime(attempt.completed_at).strftime('%d.%m.%Y %H:%M') if attempt else '',attempt.correct_answers if attempt else '',attempt.score if attempt else '',('Пройден' if attempt.passed else 'Не пройден') if attempt else '',a.get_status_display(),timezone.localtime(a.completed_at).strftime('%d.%m.%Y %H:%M') if a.completed_at else '','Да' if a.is_demo else 'Нет'])
     for column in ws.columns: ws.column_dimensions[column[0].column_letter].width=min(48,max(14,max(len(str(x.value or '')) for x in column)+2))
     data=BytesIO(); wb.save(data); response=HttpResponse(data.getvalue(),content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'); response['Content-Disposition']='attachment; filename="learning-results.xlsx"'; return response

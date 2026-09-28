@@ -1,3 +1,5 @@
+from datetime import datetime, time
+
 from django.contrib.auth.models import User
 from django.db import models
 from django.utils import timezone
@@ -139,6 +141,7 @@ class Assignment(models.Model):
     course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='assignments')
     test_version = models.ForeignKey(Test, null=True, blank=True, on_delete=models.PROTECT, related_name='assignments')
     due_date = models.DateField('Срок прохождения')
+    due_time = models.TimeField('Время окончания', null=True, blank=True)
     passing_score = models.PositiveSmallIntegerField('Порог прохождения, %', default=80)
     attempts_allowed = models.PositiveSmallIntegerField('Количество попыток', default=3)
     status = models.CharField('Статус', max_length=12, choices=STATUS, default='ASSIGNED')
@@ -150,7 +153,11 @@ class Assignment(models.Model):
     class Meta:
         ordering = ['-assigned_at', '-id']
     @property
-    def is_overdue(self): return self.status not in ('COMPLETED', 'FAILED') and self.due_date < timezone.localdate()
+    def deadline(self):
+        value = datetime.combine(self.due_date, self.due_time or time(23, 59, 59))
+        return timezone.make_aware(value, timezone.get_current_timezone())
+    @property
+    def is_overdue(self): return self.status not in ('COMPLETED', 'FAILED') and timezone.now() > self.deadline
     @property
     def attempts_left(self): return max(0, self.attempts_allowed - self.attempts.count())
 
