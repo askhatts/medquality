@@ -120,10 +120,29 @@ class LearningPortalTests(TestCase):
         self.assertIn('inline', inline.headers['Content-Disposition'])
         self.assertIn('attachment', download.headers['Content-Disposition'])
 
-    def test_sidebar_has_no_separate_directions_link(self):
+    def test_sidebar_uses_directions_instead_of_course_list(self):
         self.client.login(username='employee', password='test-password')
-        response = self.client.get(reverse('courses'))
-        self.assertNotContains(response, 'href="/quality/directions/"')
+        response = self.client.get(reverse('directions'))
+        self.assertContains(response, 'Направления качества')
+        self.assertRedirects(self.client.get(reverse('courses')), reverse('directions'))
+
+    def test_google_drive_material_is_embedded_and_opens_in_new_tab(self):
+        lesson = Lesson.objects.create(
+            course=self.course, title='Материал Drive', kind='VIDEO', order=1,
+            url='https://drive.google.com/file/d/test-file_123/view',
+        )
+        self.client.login(username='employee', password='test-password')
+        response = self.client.get(reverse('course', args=[self.course.id]))
+        self.assertContains(response, lesson.drive_embed_url)
+        self.assertContains(response, 'Открыть в Google Drive')
+        self.assertContains(response, 'target="_blank"')
+
+    def test_test_options_keep_original_values_when_display_order_is_shuffled(self):
+        self.client.login(username='employee', password='test-password')
+        response = self.client.get(reverse('test', args=[self.course.id]))
+        self.assertContains(response, 'Порядок вариантов ответа меняется')
+        self.assertContains(response, 'value="0"')
+        self.assertContains(response, 'value="1"')
 
     def test_login_shows_welcome_identity_and_five_minute_session(self):
         self.employee.first_name = 'Иван'

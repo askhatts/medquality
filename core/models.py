@@ -1,6 +1,7 @@
 from django.contrib.auth.models import User
 from django.db import models
 from django.utils import timezone
+import re
 
 class Department(models.Model):
     name = models.CharField('Отдел / отделение', max_length=160, unique=True)
@@ -76,6 +77,12 @@ class Lesson(models.Model):
         if 'youtu.be/' in self.url:
             return 'https://www.youtube-nocookie.com/embed/' + self.url.split('youtu.be/', 1)[1].split('?', 1)[0]
         return self.url
+    @property
+    def drive_embed_url(self):
+        if not self.url or 'drive.google.com' not in self.url:
+            return ''
+        match = re.search(r'/d/([A-Za-z0-9_-]+)', self.url)
+        return f'https://drive.google.com/file/d/{match.group(1)}/preview' if match else ''
     class Meta: ordering = ['order', 'id']
 
 class Test(models.Model):

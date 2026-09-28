@@ -1,6 +1,7 @@
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
+import random
 
 from django.conf import settings
 from django.contrib import messages
@@ -111,7 +112,7 @@ def filtered_assignments(request):
 @login_required
 def dashboard(request):
     p = profile(request.user); assignments = visible_assignments(request.user)
-    if p.role == 'EMPLOYEE': return redirect('courses')
+    if p.role == 'EMPLOYEE': return redirect('directions')
     people = Profile.objects.filter(user__is_active=True)
     if p.role == 'HEAD': people = people.filter(department=p.department)
     return render(request, 'core/dashboard.html', {'profile': p, 'assignments': assignments[:8], 'overdue': [a for a in assignments if a.is_overdue], 'completed': assignments.filter(status='COMPLETED').count(), 'in_progress': assignments.filter(status='IN_PROGRESS').count(), 'assigned': assignments.filter(status='ASSIGNED').count(), 'people_count': people.count()})
@@ -125,17 +126,15 @@ def directions(request):
 
 @login_required
 def direction_detail(request, pk):
-    direction = get_object_or_404(QualityDirection.objects.prefetch_related('courses', 'requirements__documents'), pk=pk, active=True)
+    direction = get_object_or_404(QualityDirection.objects.prefetch_related(
+        Prefetch('courses', queryset=Course.objects.filter(active=True), to_attr='active_courses')
+    ), pk=pk, active=True)
     return render(request, 'core/direction.html', {'direction': direction})
 
 
 @login_required
 def courses(request):
-    items = Course.objects.filter(active=True).select_related('direction').prefetch_related('lessons')
-    direction = request.GET.get('direction')
-    if direction: items = items.filter(direction_id=direction)
-    mine = Assignment.objects.filter(user=request.user, status__in=('ASSIGNED','IN_PROGRESS','OVERDUE')).select_related('course')
-    return render(request, 'core/courses.html', {'courses': items, 'directions': QualityDirection.objects.filter(active=True), 'selected_direction': direction, 'my_assignments': mine})
+    return redirect('directions')
 
 
 @login_required
@@ -377,7 +376,14 @@ def take_test(request, pk):
         else: assignment.status='IN_PROGRESS'
         assignment.save(); AuditLog.objects.create(user=request.user, action='Пройден тест', object_label=f'{course.title}: {score}%')
         return render(request, 'core/test.html', {'test':test,'assignment':assignment,'result':attempt})
-    return render(request, 'core/test.html', {'test':test,'assignment':assignment})
+    question_items = []
+    for question in test.questions.all():
+        options = list(enumerate(question.options))
+        random.SystemRandom().shuffle(options)
+        question_items.append({'question': question, 'options': options})
+    return render(request, 'core/test.html', {
+        'test': test, 'assignment': assignment, 'question_items': question_items,
+    })
 
 
 @login_required

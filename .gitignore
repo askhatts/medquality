@@ -17,3 +17,4 @@ backups/
 .pytest_cache/
 .idea/
 .vscode/
+credentials/
