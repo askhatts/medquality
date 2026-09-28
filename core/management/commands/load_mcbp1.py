@@ -93,6 +93,9 @@ class Command(BaseCommand):
 
         with transaction.atomic():
             User.objects.exclude(username='sysadmin').delete()
+            # У sysadmin также могли остаться демонстрационные назначения,
+            # защищающие старые версии тестов через Assignment.test_version.
+            Assignment.objects.all().delete()
             InternalDocument.objects.all().delete()
             QualityDirection.objects.all().delete()
             Department.objects.all().delete()
