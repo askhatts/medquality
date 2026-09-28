@@ -464,22 +464,55 @@ def create_assignment(request):
     AuditLog.objects.create(user=request.user,action='Назначено обучение',object_label=course.title); return redirect('assignments')
 
 
+def report_rows(request):
+    assignments = list(filtered_assignments(request))
+    max_attempts = max(
+        (
+            max(
+                assignment.attempts_allowed,
+                max((attempt.number for attempt in assignment.attempts.all()), default=0),
+            )
+            for assignment in assignments
+        ),
+        default=0,
+    )
+    attempt_numbers = list(range(1, max_attempts + 1))
+    rows = []
+    for assignment in assignments:
+        by_number = {attempt.number: attempt for attempt in assignment.attempts.all()}
+        rows.append({
+            'assignment': assignment,
+            'attempts': [by_number.get(number) for number in attempt_numbers],
+        })
+    return rows, attempt_numbers
+
+
 @login_required
 def reports(request):
     if role_in(request.user,'EMPLOYEE'): return deny(request.user)
-    return render(request,'core/reports.html',{'assignments':filtered_assignments(request),'directions':QualityDirection.objects.all(),'requirements':QualityRequirement.objects.all(),'courses':Course.objects.all(),'departments':Department.objects.all(),'employees':Profile.objects.select_related('user').all()})
+    rows, attempt_numbers = report_rows(request)
+    return render(request,'core/reports.html',{'report_rows':rows,'attempt_numbers':attempt_numbers,'directions':QualityDirection.objects.all(),'requirements':QualityRequirement.objects.all(),'courses':Course.objects.all(),'departments':Department.objects.all(),'employees':Profile.objects.select_related('user').all()})
 
 
 @login_required
 def report_excel(request):
     if role_in(request.user,'EMPLOYEE'): return deny(request.user)
+    rows, attempt_numbers = report_rows(request)
     wb=Workbook(); ws=wb.active; ws.title='История обучения'
-    headers=['Цикл','Сотрудник','Тип','Отдел / отделение','Должность','Категория','Курс','Версия теста','Назначено','Срок','Начато','Попытка','Дата попытки','Верных ответов','Оценка, %','Результат попытки','Итоговый статус','Завершено','Демо']
+    headers=['Цикл','Сотрудник','Тип','Отдел / отделение','Должность','Категория','Курс','Версия теста','Назначено','Срок','Начато']
+    headers += [f'Попытка {number}' for number in attempt_numbers]
+    headers += ['Итоговый статус','Завершено','Демо']
     ws.append(headers); fill=PatternFill('solid',fgColor='103B53')
     for cell in ws[1]: cell.font=Font(color='FFFFFF',bold=True); cell.fill=fill
-    for a in filtered_assignments(request):
+    for row in rows:
+        a=row['assignment']
         p=a.user.profile
-        for attempt in list(a.attempts.all()) or [None]:
-            ws.append([a.id,a.user.get_full_name() or a.user.username,str(p.employee_type or ''),str(p.department or ''),p.position,a.course.direction.title,a.course.title,a.test_version.version if a.test_version else '',timezone.localtime(a.assigned_at).strftime('%d.%m.%Y %H:%M'),timezone.localtime(a.deadline).strftime('%d.%m.%Y %H:%M'),timezone.localtime(a.acknowledged_at).strftime('%d.%m.%Y %H:%M') if a.acknowledged_at else '',attempt.number if attempt else '',timezone.localtime(attempt.completed_at).strftime('%d.%m.%Y %H:%M') if attempt else '',attempt.correct_answers if attempt else '',attempt.score if attempt else '',('Пройден' if attempt.passed else 'Не пройден') if attempt else '',a.get_status_display(),timezone.localtime(a.completed_at).strftime('%d.%m.%Y %H:%M') if a.completed_at else '','Да' if a.is_demo else 'Нет'])
+        values=[a.id,a.user.get_full_name() or a.user.username,str(p.employee_type or ''),str(p.department or ''),p.position,a.course.direction.title,a.course.title,a.test_version.version if a.test_version else '',timezone.localtime(a.assigned_at).strftime('%d.%m.%Y %H:%M'),timezone.localtime(a.deadline).strftime('%d.%m.%Y %H:%M'),timezone.localtime(a.acknowledged_at).strftime('%d.%m.%Y %H:%M') if a.acknowledged_at else '']
+        values += [
+            f"{timezone.localtime(attempt.completed_at).strftime('%d.%m.%Y %H:%M')} · {attempt.correct_answers} верных · {attempt.score}% · {'Пройдено' if attempt.passed else 'Не пройдено'}"
+            if attempt else '' for attempt in row['attempts']
+        ]
+        values += [a.get_status_display(),timezone.localtime(a.completed_at).strftime('%d.%m.%Y %H:%M') if a.completed_at else '','Да' if a.is_demo else 'Нет']
+        ws.append(values)
     for column in ws.columns: ws.column_dimensions[column[0].column_letter].width=min(48,max(14,max(len(str(x.value or '')) for x in column)+2))
     data=BytesIO(); wb.save(data); response=HttpResponse(data.getvalue(),content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'); response['Content-Disposition']='attachment; filename="learning-results.xlsx"'; return response

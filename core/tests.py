@@ -1,10 +1,12 @@
 from datetime import timedelta
+from io import BytesIO
 from django.conf import settings
 from django.contrib.auth.models import User
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
+from openpyxl import load_workbook
 from .models import Assignment, Course, Department, EmployeeType, InternalDocument, Lesson, Profile, QualityDirection, Question, Test, TestAttempt
 
 class LearningPortalTests(TestCase):
@@ -35,6 +37,36 @@ class LearningPortalTests(TestCase):
         cycles = Assignment.objects.filter(user=self.employee, course=self.course)
         self.assertEqual(cycles.count(), 2)
         self.assertEqual(cycles.filter(status='COMPLETED').count(), 1)
+
+    def test_report_places_attempts_in_separate_columns(self):
+        self.assignment.attempts_allowed = 2
+        self.assignment.save(update_fields=['attempts_allowed'])
+        TestAttempt.objects.create(
+            assignment=self.assignment, number=1, correct_answers=8,
+            score=80, passed=True,
+        )
+        TestAttempt.objects.create(
+            assignment=self.assignment, number=2, correct_answers=10,
+            score=100, passed=True,
+        )
+        self.client.login(username='methodist', password='test-password')
+
+        page = self.client.get(reverse('reports'))
+        self.assertContains(page, 'Попытка 1')
+        self.assertContains(page, 'Попытка 2')
+        self.assertContains(page, '80%')
+        self.assertContains(page, '100%')
+
+        response = self.client.get(reverse('report_excel'))
+        workbook = load_workbook(BytesIO(response.content))
+        sheet = workbook.active
+        headers = [cell.value for cell in sheet[1]]
+        self.assertIn('Попытка 1', headers)
+        self.assertIn('Попытка 2', headers)
+        self.assertEqual(sheet.max_row, 2)
+        values = [cell.value for cell in sheet[2]]
+        self.assertIn('80%', values[headers.index('Попытка 1')])
+        self.assertIn('100%', values[headers.index('Попытка 2')])
 
     def test_ten_reassignments_create_ten_distinct_history_cycles(self):
         self.assignment.delete()
