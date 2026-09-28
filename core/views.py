@@ -328,7 +328,8 @@ def course_detail(request, pk):
         ),
         pk=pk,
     )
-    assignment = Assignment.objects.filter(course=course, user=request.user).prefetch_related('attempts').first()
+    assignments = Assignment.objects.filter(course=course, user=request.user).prefetch_related('attempts')
+    assignment = assignments.filter(status__in=('ASSIGNED', 'IN_PROGRESS', 'OVERDUE')).first() or assignments.first()
     test = assignment.test_version if assignment and assignment.test_version_id else current_test(course, True)
     return render(request, 'core/course.html', {'course': course, 'assignment': assignment, 'test': test})
 
@@ -350,7 +351,8 @@ def acknowledge(request, pk):
 @login_required
 def take_test(request, pk):
     course = get_object_or_404(Course, pk=pk)
-    assignment = Assignment.objects.filter(course=course, user=request.user).exclude(status='COMPLETED').first() or Assignment.objects.filter(course=course, user=request.user).first()
+    assignments = Assignment.objects.filter(course=course, user=request.user)
+    assignment = assignments.filter(status__in=('ASSIGNED', 'IN_PROGRESS', 'OVERDUE')).first() or assignments.first()
     if not assignment: return deny(request.user)
     if assignment.is_overdue:
         if assignment.status != 'OVERDUE':
@@ -454,11 +456,11 @@ def create_assignment(request):
     if not user_ids: return HttpResponse('Выберите хотя бы один отдел или одного сотрудника.',status=400)
     values={'due_date':due,'due_time':due_time,'passing_score':int(request.POST['passing_score']),'attempts_allowed':int(request.POST['attempts_allowed']),'test_version':test}
     for user_id in user_ids:
-        active=Assignment.objects.filter(user_id=user_id,course=course,status__in=('ASSIGNED','IN_PROGRESS','OVERDUE')).first()
-        if active:
-            for field,value in values.items(): setattr(active,field,value)
-            active.save(update_fields=list(values))
-        else: Assignment.objects.create(user_id=user_id,course=course,**values)
+        Assignment.objects.filter(
+            user_id=user_id, course=course,
+            status__in=('ASSIGNED', 'IN_PROGRESS', 'OVERDUE'),
+        ).update(status='REASSIGNED')
+        Assignment.objects.create(user_id=user_id,course=course,**values)
     AuditLog.objects.create(user=request.user,action='Назначено обучение',object_label=course.title); return redirect('assignments')
 
 

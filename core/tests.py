@@ -18,9 +18,13 @@ class LearningPortalTests(TestCase):
     def test_closed_dashboard(self): self.assertRedirects(self.client.get(reverse('dashboard')), '/quality/login/?next=/quality/')
     def test_department_assignment_creates_personal_assignment(self):
         self.client.login(username='methodist', password='test-password'); response = self.client.post(reverse('assignment_new'), {'course':self.course.id,'due_date':'2030-01-01','due_time':'22:00','passing_score':90,'attempts_allowed':2,'departments':[self.employee.profile.department_id]})
-        self.assertEqual(response.status_code, 302); self.assignment.refresh_from_db(); self.assertEqual(self.assignment.passing_score, 90)
-        self.assertEqual(self.assignment.due_time.strftime('%H:%M'), '22:00')
-        self.assertEqual(self.assignment.attempts_allowed, 2)
+        self.assertEqual(response.status_code, 302); self.assignment.refresh_from_db()
+        self.assertEqual(self.assignment.status, 'REASSIGNED')
+        latest = Assignment.objects.filter(user=self.employee, course=self.course).first()
+        self.assertEqual(Assignment.objects.filter(user=self.employee, course=self.course).count(), 2)
+        self.assertEqual(latest.passing_score, 90)
+        self.assertEqual(latest.due_time.strftime('%H:%M'), '22:00')
+        self.assertEqual(latest.attempts_allowed, 2)
     def test_successful_test_blocks_further_attempts(self):
         self.client.login(username='employee', password='test-password'); response = self.client.post(reverse('test', args=[self.course.id]), {f'q{self.test.questions.first().id}':'0'})
         self.assertContains(response, 'Тест пройден'); self.assignment.refresh_from_db(); self.assertEqual(self.assignment.status, 'COMPLETED'); self.assertRedirects(self.client.get(reverse('test', args=[self.course.id])), reverse('course', args=[self.course.id]))
@@ -31,6 +35,20 @@ class LearningPortalTests(TestCase):
         cycles = Assignment.objects.filter(user=self.employee, course=self.course)
         self.assertEqual(cycles.count(), 2)
         self.assertEqual(cycles.filter(status='COMPLETED').count(), 1)
+
+    def test_ten_reassignments_create_ten_distinct_history_cycles(self):
+        self.assignment.delete()
+        self.client.login(username='methodist', password='test-password')
+        for day in range(1, 11):
+            self.client.post(reverse('assignment_new'), {
+                'course': self.course.id, 'due_date': f'2030-01-{day:02d}',
+                'due_time': '22:00', 'passing_score': 80,
+                'attempts_allowed': 2, 'users': [self.employee.id],
+            })
+        cycles = Assignment.objects.filter(user=self.employee, course=self.course)
+        self.assertEqual(cycles.count(), 10)
+        self.assertEqual(cycles.filter(status='REASSIGNED').count(), 9)
+        self.assertEqual(cycles.filter(status='ASSIGNED').count(), 1)
     def test_multiple_answer_question_is_scored(self):
         question = Question.objects.create(test=self.test, text='Выберите два', question_type='MULTIPLE', options=['A','B','C'], correct_indexes=[0,2], points=2, order=2)
         self.assignment.attempts_allowed = 2; self.assignment.save()

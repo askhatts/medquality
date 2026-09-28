@@ -136,7 +136,7 @@ class InternalDocument(models.Model):
     class Meta: ordering = ['title']
 
 class Assignment(models.Model):
-    STATUS = [('ASSIGNED', 'Назначено'), ('IN_PROGRESS', 'В процессе'), ('COMPLETED', 'Пройдено'), ('OVERDUE', 'Просрочено'), ('FAILED', 'Не пройдено')]
+    STATUS = [('ASSIGNED', 'Назначено'), ('IN_PROGRESS', 'В процессе'), ('COMPLETED', 'Пройдено'), ('OVERDUE', 'Просрочено'), ('FAILED', 'Не пройдено'), ('REASSIGNED', 'Переназначено')]
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='assignments')
     course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='assignments')
     test_version = models.ForeignKey(Test, null=True, blank=True, on_delete=models.PROTECT, related_name='assignments')
@@ -157,7 +157,7 @@ class Assignment(models.Model):
         value = datetime.combine(self.due_date, self.due_time or time(23, 59, 59))
         return timezone.make_aware(value, timezone.get_current_timezone())
     @property
-    def is_overdue(self): return self.status not in ('COMPLETED', 'FAILED') and timezone.now() > self.deadline
+    def is_overdue(self): return self.status not in ('COMPLETED', 'FAILED', 'REASSIGNED') and timezone.now() > self.deadline
     @property
     def attempts_left(self): return max(0, self.attempts_allowed - self.attempts.count())
 
