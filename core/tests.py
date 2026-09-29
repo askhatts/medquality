@@ -49,11 +49,17 @@ class LearningPortalTests(TestCase):
             assignment=self.assignment, number=2, correct_answers=10,
             score=100, passed=True,
         )
+        Assignment.objects.create(
+            user=self.employee, course=self.course, test_version=self.test,
+            due_date=timezone.localdate() + timedelta(days=30),
+            passing_score=80, attempts_allowed=2,
+        )
         self.client.login(username='methodist', password='test-password')
 
         page = self.client.get(reverse('reports'))
         self.assertContains(page, 'Попытка 1')
         self.assertContains(page, 'Попытка 2')
+        self.assertContains(page, 'Назначение 2')
         self.assertContains(page, '80%')
         self.assertContains(page, '100%')
 
@@ -61,12 +67,15 @@ class LearningPortalTests(TestCase):
         workbook = load_workbook(BytesIO(response.content))
         sheet = workbook.active
         headers = [cell.value for cell in sheet[1]]
-        self.assertIn('Попытка 1', headers)
-        self.assertIn('Попытка 2', headers)
+        first_attempt = 'Назначение 1: попытка 1'
+        second_attempt = 'Назначение 1: попытка 2'
+        self.assertIn(first_attempt, headers)
+        self.assertIn(second_attempt, headers)
+        self.assertIn('Назначение 2: попытка 1', headers)
         self.assertEqual(sheet.max_row, 2)
         values = [cell.value for cell in sheet[2]]
-        self.assertIn('80%', values[headers.index('Попытка 1')])
-        self.assertIn('100%', values[headers.index('Попытка 2')])
+        self.assertIn('80%', values[headers.index(first_attempt)])
+        self.assertIn('100%', values[headers.index(second_attempt)])
 
     def test_ten_reassignments_create_ten_distinct_history_cycles(self):
         self.assignment.delete()

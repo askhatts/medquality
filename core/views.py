@@ -480,42 +480,66 @@ def report_rows(request):
         default=0,
     )
     attempt_numbers = list(range(1, max_attempts + 1))
-    rows = []
+    users = {}
     for assignment in assignments:
         by_number = {attempt.number: attempt for attempt in assignment.attempts.all()}
-        rows.append({
+        users.setdefault(assignment.user_id, {
+            'user': assignment.user,
+            'assignments': [],
+        })['assignments'].append({
             'assignment': assignment,
             'attempts': [by_number.get(number) for number in attempt_numbers],
         })
-    return rows, attempt_numbers
+    max_assignments = max((len(row['assignments']) for row in users.values()), default=0)
+    assignment_numbers = list(range(1, max_assignments + 1))
+    rows = []
+    for row in sorted(users.values(), key=lambda item: (
+        item['user'].get_full_name() or item['user'].username
+    ).casefold()):
+        row['assignments'].sort(key=lambda item: (
+            item['assignment'].assigned_at, item['assignment'].id
+        ))
+        row['assignments'] += [None] * (max_assignments - len(row['assignments']))
+        rows.append(row)
+    return rows, attempt_numbers, assignment_numbers
 
 
 @login_required
 def reports(request):
     if role_in(request.user,'EMPLOYEE'): return deny(request.user)
-    rows, attempt_numbers = report_rows(request)
-    return render(request,'core/reports.html',{'report_rows':rows,'attempt_numbers':attempt_numbers,'directions':QualityDirection.objects.all(),'requirements':QualityRequirement.objects.all(),'courses':Course.objects.all(),'departments':Department.objects.all(),'employees':Profile.objects.select_related('user').all()})
+    rows, attempt_numbers, assignment_numbers = report_rows(request)
+    return render(request,'core/reports.html',{'report_rows':rows,'attempt_numbers':attempt_numbers,'assignment_numbers':assignment_numbers,'directions':QualityDirection.objects.all(),'requirements':QualityRequirement.objects.all(),'courses':Course.objects.all(),'departments':Department.objects.all(),'employees':Profile.objects.select_related('user').all()})
 
 
 @login_required
 def report_excel(request):
     if role_in(request.user,'EMPLOYEE'): return deny(request.user)
-    rows, attempt_numbers = report_rows(request)
+    rows, attempt_numbers, assignment_numbers = report_rows(request)
     wb=Workbook(); ws=wb.active; ws.title='История обучения'
-    headers=['Цикл','Сотрудник','Тип','Отдел / отделение','Должность','Категория','Курс','Версия теста','Назначено','Срок','Начато']
-    headers += [f'Попытка {number}' for number in attempt_numbers]
-    headers += ['Итоговый статус','Завершено','Демо']
+    headers=['Сотрудник','Тип','Отдел / отделение','Должность']
+    for assignment_number in assignment_numbers:
+        headers += [
+            f'Назначение {assignment_number}: курс и срок',
+            *[f'Назначение {assignment_number}: попытка {number}' for number in attempt_numbers],
+        ]
     ws.append(headers); fill=PatternFill('solid',fgColor='103B53')
     for cell in ws[1]: cell.font=Font(color='FFFFFF',bold=True); cell.fill=fill
     for row in rows:
-        a=row['assignment']
-        p=a.user.profile
-        values=[a.id,a.user.get_full_name() or a.user.username,str(p.employee_type or ''),str(p.department or ''),p.position,a.course.direction.title,a.course.title,a.test_version.version if a.test_version else '',timezone.localtime(a.assigned_at).strftime('%d.%m.%Y %H:%M'),timezone.localtime(a.deadline).strftime('%d.%m.%Y %H:%M'),timezone.localtime(a.acknowledged_at).strftime('%d.%m.%Y %H:%M') if a.acknowledged_at else '']
-        values += [
-            f"{timezone.localtime(attempt.completed_at).strftime('%d.%m.%Y %H:%M')} · {attempt.correct_answers} верных · {attempt.score}% · {'Пройдено' if attempt.passed else 'Не пройдено'}"
-            if attempt else '' for attempt in row['attempts']
-        ]
-        values += [a.get_status_display(),timezone.localtime(a.completed_at).strftime('%d.%m.%Y %H:%M') if a.completed_at else '','Да' if a.is_demo else 'Нет']
+        user=row['user']; p=user.profile
+        values=[user.get_full_name() or user.username,str(p.employee_type or ''),str(p.department or ''),p.position]
+        for entry in row['assignments']:
+            if not entry:
+                values += [''] * (1 + len(attempt_numbers))
+                continue
+            a=entry['assignment']
+            values.append(
+                f"{a.course.title} · назначено {timezone.localtime(a.assigned_at).strftime('%d.%m.%Y')} · "
+                f"срок {timezone.localtime(a.deadline).strftime('%d.%m.%Y %H:%M')} · {a.get_status_display()}"
+            )
+            values += [
+                f"{timezone.localtime(attempt.completed_at).strftime('%d.%m.%Y %H:%M')} · {attempt.correct_answers} верных · {attempt.score}% · {'Пройдено' if attempt.passed else 'Не пройдено'}"
+                if attempt else '' for attempt in entry['attempts']
+            ]
         ws.append(values)
     for column in ws.columns: ws.column_dimensions[column[0].column_letter].width=min(48,max(14,max(len(str(x.value or '')) for x in column)+2))
     data=BytesIO(); wb.save(data); response=HttpResponse(data.getvalue(),content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'); response['Content-Disposition']='attachment; filename="learning-results.xlsx"'; return response
