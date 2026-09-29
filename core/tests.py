@@ -80,24 +80,21 @@ class LearningPortalTests(TestCase):
         self.client.login(username='methodist', password='test-password')
 
         page = self.client.get(reverse('reports'))
-        self.assertContains(page, 'Попытка 1')
-        self.assertContains(page, 'Попытка 2')
         self.assertContains(page, 'Назначение 2')
-        self.assertContains(page, 'Выполнена')
+        self.assertContains(page, '100%')
+        self.assertNotContains(page, 'Попытка 1')
 
         response = self.client.get(reverse('report_excel'))
         workbook = load_workbook(BytesIO(response.content))
         sheet = workbook.active
         headers = [cell.value for cell in sheet[1]]
-        first_attempt = 'Назначение 1: попытка 1'
-        second_attempt = 'Назначение 1: попытка 2'
-        self.assertIn(first_attempt, headers)
-        self.assertIn(second_attempt, headers)
-        self.assertIn('Назначение 2: попытка 1', headers)
+        first_assignment = 'Назначение 1'
+        self.assertIn(first_assignment, headers)
+        self.assertIn('Назначение 2', headers)
+        self.assertNotIn('Попытка 1', headers)
         self.assertEqual(sheet.max_row, 2)
         values = [cell.value for cell in sheet[2]]
-        self.assertEqual('Выполнена', values[headers.index(first_attempt)])
-        self.assertEqual('Выполнена', values[headers.index(second_attempt)])
+        self.assertIn('100%', values[headers.index(first_assignment)])
 
     def test_ten_reassignments_create_ten_distinct_history_cycles(self):
         self.assignment.delete()

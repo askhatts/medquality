@@ -539,26 +539,15 @@ def create_assignment(request):
 
 def report_rows(request):
     assignments = list(filtered_assignments(request))
-    max_attempts = max(
-        (
-            max(
-                assignment.attempts_allowed,
-                max((attempt.number for attempt in assignment.attempts.all()), default=0),
-            )
-            for assignment in assignments
-        ),
-        default=0,
-    )
-    attempt_numbers = list(range(1, max_attempts + 1))
     users = {}
     for assignment in assignments:
-        by_number = {attempt.number: attempt for attempt in assignment.attempts.all()}
+        attempts = list(assignment.attempts.all())
         users.setdefault(assignment.user_id, {
             'user': assignment.user,
             'assignments': [],
         })['assignments'].append({
             'assignment': assignment,
-            'attempts': [by_number.get(number) for number in attempt_numbers],
+            'last_attempt': attempts[-1] if attempts else None,
         })
     max_assignments = max((len(row['assignments']) for row in users.values()), default=0)
     assignment_numbers = list(range(1, max_assignments + 1))
@@ -571,27 +560,24 @@ def report_rows(request):
         ))
         row['assignments'] += [None] * (max_assignments - len(row['assignments']))
         rows.append(row)
-    return rows, attempt_numbers, assignment_numbers
+    return rows, assignment_numbers
 
 
 @login_required
 def reports(request):
     if role_in(request.user,'EMPLOYEE'): return deny(request.user)
-    rows, attempt_numbers, assignment_numbers = report_rows(request)
-    return render(request,'core/reports.html',{'report_rows':rows,'attempt_numbers':attempt_numbers,'assignment_numbers':assignment_numbers,'directions':QualityDirection.objects.all(),'requirements':QualityRequirement.objects.all(),'courses':Course.objects.all(),'departments':Department.objects.all(),'employees':Profile.objects.select_related('user').all()})
+    rows, assignment_numbers = report_rows(request)
+    return render(request,'core/reports.html',{'report_rows':rows,'assignment_numbers':assignment_numbers,'directions':QualityDirection.objects.all(),'requirements':QualityRequirement.objects.all(),'courses':Course.objects.all(),'departments':Department.objects.all(),'employees':Profile.objects.select_related('user').all()})
 
 
 @login_required
 def report_excel(request):
     if role_in(request.user,'EMPLOYEE'): return deny(request.user)
-    rows, attempt_numbers, assignment_numbers = report_rows(request)
+    rows, assignment_numbers = report_rows(request)
     wb=Workbook(); ws=wb.active; ws.title='История обучения'
     headers=['Сотрудник','Тип','Отдел / отделение','Должность']
     for assignment_number in assignment_numbers:
-        headers += [
-            f'Назначение {assignment_number}: курс и срок',
-            *[f'Назначение {assignment_number}: попытка {number}' for number in attempt_numbers],
-        ]
+        headers.append(f'Назначение {assignment_number}')
     ws.append(headers); fill=PatternFill('solid',fgColor='103B53')
     for cell in ws[1]: cell.font=Font(color='FFFFFF',bold=True); cell.fill=fill
     for row in rows:
@@ -599,22 +585,21 @@ def report_excel(request):
         values=[user.get_full_name() or user.username,str(p.employee_type or ''),str(p.department or ''),p.position]
         for entry in row['assignments']:
             if not entry:
-                values += [''] * (1 + len(attempt_numbers))
+                values.append('')
                 continue
             a=entry['assignment']
             values.append(
                 f"{a.course.title} · назначено {timezone.localtime(a.assigned_at).strftime('%d.%m.%Y')} · "
                 f"срок {timezone.localtime(a.deadline).strftime('%d.%m.%Y %H:%M')} · {a.get_status_display()}"
             )
-            values += [
-                f"{timezone.localtime(attempt.completed_at).strftime('%d.%m.%Y %H:%M')} · {attempt.correct_answers} верных · {attempt.score}% · {'Пройдено' if attempt.passed else 'Не пройдено'}"
-                if attempt else '' for attempt in entry['attempts']
-            ]
-            values[-(1 + len(attempt_numbers))] = (
-                f"{a.course.title} · назначено {timezone.localtime(a.assigned_at).strftime('%d.%m.%Y')} · "
-                f"срок {timezone.localtime(a.deadline).strftime('%d.%m.%Y')} · {a.get_status_display()}"
-            )
-            values[-len(attempt_numbers):] = ['Выполнена' if attempt else '' for attempt in entry['attempts']]
+            last_attempt = entry['last_attempt']
+            if last_attempt:
+                values[-1] = (
+                    f"{a.course.title} · оценка {last_attempt.score}% · "
+                    f"пройдено {timezone.localtime(last_attempt.completed_at).strftime('%d.%m.%Y')}"
+                )
+            else:
+                values[-1] = f"{a.course.title} · нет результата"
         ws.append(values)
     for column in ws.columns: ws.column_dimensions[column[0].column_letter].width=min(48,max(14,max(len(str(x.value or '')) for x in column)+2))
     data=BytesIO(); wb.save(data); response=HttpResponse(data.getvalue(),content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'); response['Content-Disposition']='attachment; filename="learning-results.xlsx"'; return response
