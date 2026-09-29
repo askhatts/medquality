@@ -89,6 +89,7 @@ class Lesson(models.Model):
 
 class Test(models.Model):
     legacy_attempts_allowed = models.PositiveSmallIntegerField(db_column='attempts_allowed', default=3, editable=False)
+    time_limit_minutes = models.PositiveSmallIntegerField('Лимит времени, минут', default=0)
     STATUSES = [('DRAFT', 'Черновик'), ('PUBLISHED', 'Опубликован')]
     course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='tests')
     title = models.CharField('Название теста', max_length=255)

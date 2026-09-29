@@ -1,0 +1,4 @@
+{% extends 'core/base.html' %}
+{% block content %}
+<div class="card"><h1>Начать итоговый тест</h1><p><b>{{ test.title }}</b></p><p class="muted">Порог прохождения: {{ assignment.passing_score }}% · доступно попыток: {{ assignment.attempts_left }}.</p>{% if test.time_limit_minutes %}<p class="warn">На выполнение даётся {{ test.time_limit_minutes }} мин. Отсчёт начнётся после нажатия кнопки.</p>{% else %}<p class="muted">Ограничение по времени не установлено.</p>{% endif %}{% if test.instructions %}<p>{{ test.instructions }}</p>{% endif %}<form method="post" action="{% url 'test_start' test.course_id %}">{% csrf_token %}<button>Начать тест</button></form><p><a href="{% url 'course' test.course_id %}">Вернуться к материалам</a></p></div>
+{% endblock %}

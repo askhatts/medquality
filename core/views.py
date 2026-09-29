@@ -265,7 +265,7 @@ def editable_test(course):
     if test.status == 'PUBLISHED' and TestAttempt.objects.filter(assignment__test_version=test).exists():
         with transaction.atomic():
             test.is_current = False; test.save(update_fields=['is_current'])
-            clone = Test.objects.create(course=course, title=test.title, instructions=test.instructions, version=test.version + 1, status='DRAFT', is_current=True)
+            clone = Test.objects.create(course=course, title=test.title, instructions=test.instructions, time_limit_minutes=test.time_limit_minutes, version=test.version + 1, status='DRAFT', is_current=True)
             for q in test.questions.all():
                 Question.objects.create(test=clone, text=q.text, question_type=q.question_type, options=q.options, correct_index=q.correct_index, correct_indexes=q.correct_indexes, points=q.points, explanation=q.explanation, order=q.order)
             return clone
@@ -287,7 +287,11 @@ def test_editor(request, course_id):
             source_question = Question.objects.filter(pk=request.POST.get('question_id')).first() if request.POST.get('question_id') else None
             test = editable_test(course)
             if action == 'save_test':
-                test.title = request.POST['title'].strip(); test.instructions = request.POST.get('instructions','').strip(); test.save()
+                try:
+                    time_limit_minutes = max(0, min(240, int(request.POST.get('time_limit_minutes', 0))))
+                except (TypeError, ValueError):
+                    time_limit_minutes = 0
+                test.title = request.POST['title'].strip(); test.instructions = request.POST.get('instructions','').strip(); test.time_limit_minutes = time_limit_minutes; test.save()
             else:
                 question = test.questions.filter(order=source_question.order, text=source_question.text).first() if source_question else Question(test=test)
                 if question is None: question = Question(test=test)
@@ -351,11 +355,65 @@ def acknowledge(request, pk):
     return redirect('course', pk=assignment.course_id)
 
 
+def test_assignment(course, user):
+    assignments = Assignment.objects.filter(course=course, user=user)
+    return assignments.filter(status__in=('ASSIGNED', 'IN_PROGRESS', 'OVERDUE')).first() or assignments.first()
+
+
+def test_timer_key(assignment):
+    return f'test_started_at_{assignment.id}'
+
+
+def test_started_at(request, assignment):
+    value = request.session.get(test_timer_key(assignment))
+    if not value:
+        return None
+    try:
+        started_at = datetime.fromisoformat(value)
+        return started_at if timezone.is_aware(started_at) else timezone.make_aware(started_at)
+    except (TypeError, ValueError):
+        return None
+
+
+def test_seconds_left(test, started_at):
+    if not test.time_limit_minutes or not started_at:
+        return None
+    return max(0, int(test.time_limit_minutes * 60 - (timezone.now() - started_at).total_seconds()))
+
+
+def record_timeout(request, assignment, test):
+    attempt = TestAttempt.objects.create(
+        assignment=assignment, number=assignment.attempts.count() + 1,
+        correct_answers=0, score=0, passed=False,
+        answers_snapshot=[{'timed_out': True}],
+    )
+    assignment.status = 'FAILED' if assignment.attempts_left == 0 else 'IN_PROGRESS'
+    assignment.save(update_fields=['status'])
+    request.session.pop(test_timer_key(assignment), None)
+    AuditLog.objects.create(user=request.user, action='Время теста истекло', object_label=test.title)
+    return attempt
+
+
+@login_required
+def start_test(request, pk):
+    if request.method != 'POST':
+        return redirect('test', pk=pk)
+    course = get_object_or_404(Course, pk=pk)
+    assignment = test_assignment(course, request.user)
+    if not assignment or assignment.is_overdue or assignment.status == 'COMPLETED' or assignment.attempts_left == 0:
+        return redirect('course', pk=pk)
+    test = assignment.test_version or current_test(course, True)
+    if not test:
+        return HttpResponse('Итоговый тест ещё не опубликован.', status=409)
+    request.session[test_timer_key(assignment)] = timezone.now().isoformat()
+    request.session.modified = True
+    return redirect('test', pk=pk)
+
+
 @login_required
 def take_test(request, pk):
     course = get_object_or_404(Course, pk=pk)
-    assignments = Assignment.objects.filter(course=course, user=request.user)
-    assignment = assignments.filter(status__in=('ASSIGNED', 'IN_PROGRESS', 'OVERDUE')).first() or assignments.first()
+    assignment = test_assignment(course, request.user)
     if not assignment: return deny(request.user)
     if assignment.is_overdue:
         if assignment.status != 'OVERDUE':
@@ -365,6 +423,17 @@ def take_test(request, pk):
     test = assignment.test_version or current_test(course, True)
     if not test: return HttpResponse('Итоговый тест ещё не опубликован.', status=409)
     if assignment.status == 'COMPLETED' or assignment.attempts_left == 0: return redirect('course', pk=pk)
+    started_at = test_started_at(request, assignment)
+    if request.method == 'GET' and not started_at:
+        return render(request, 'core/test_start.html', {'test': test, 'assignment': assignment})
+    if not started_at:
+        started_at = timezone.now()
+        request.session[test_timer_key(assignment)] = started_at.isoformat()
+        request.session.modified = True
+    seconds_left = test_seconds_left(test, started_at)
+    if seconds_left == 0:
+        attempt = record_timeout(request, assignment, test)
+        return render(request, 'core/test.html', {'test': test, 'assignment': assignment, 'result': attempt, 'timed_out': True})
     if request.method == 'POST':
         questions=list(test.questions.all()); total=sum(q.points for q in questions); earned=0; correct_count=0; snapshot=[]
         for q in questions:
@@ -380,6 +449,7 @@ def take_test(request, pk):
         elif assignment.attempts_left == 0: assignment.status='FAILED'
         else: assignment.status='IN_PROGRESS'
         assignment.save(); AuditLog.objects.create(user=request.user, action='Пройден тест', object_label=f'{course.title}: {score}%')
+        request.session.pop(test_timer_key(assignment), None)
         return render(request, 'core/test.html', {'test':test,'assignment':assignment,'result':attempt})
     question_items = []
     for question in test.questions.all():
@@ -387,7 +457,7 @@ def take_test(request, pk):
         random.SystemRandom().shuffle(options)
         question_items.append({'question': question, 'options': options})
     return render(request, 'core/test.html', {
-        'test': test, 'assignment': assignment, 'question_items': question_items,
+        'test': test, 'assignment': assignment, 'question_items': question_items, 'seconds_left': seconds_left,
     })
 
 
@@ -540,6 +610,11 @@ def report_excel(request):
                 f"{timezone.localtime(attempt.completed_at).strftime('%d.%m.%Y %H:%M')} · {attempt.correct_answers} верных · {attempt.score}% · {'Пройдено' if attempt.passed else 'Не пройдено'}"
                 if attempt else '' for attempt in entry['attempts']
             ]
+            values[-(1 + len(attempt_numbers))] = (
+                f"{a.course.title} · назначено {timezone.localtime(a.assigned_at).strftime('%d.%m.%Y')} · "
+                f"срок {timezone.localtime(a.deadline).strftime('%d.%m.%Y')} · {a.get_status_display()}"
+            )
+            values[-len(attempt_numbers):] = ['Выполнена' if attempt else '' for attempt in entry['attempts']]
         ws.append(values)
     for column in ws.columns: ws.column_dimensions[column[0].column_letter].width=min(48,max(14,max(len(str(x.value or '')) for x in column)+2))
     data=BytesIO(); wb.save(data); response=HttpResponse(data.getvalue(),content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'); response['Content-Disposition']='attachment; filename="learning-results.xlsx"'; return response

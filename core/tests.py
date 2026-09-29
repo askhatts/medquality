@@ -30,6 +30,29 @@ class LearningPortalTests(TestCase):
     def test_successful_test_blocks_further_attempts(self):
         self.client.login(username='employee', password='test-password'); response = self.client.post(reverse('test', args=[self.course.id]), {f'q{self.test.questions.first().id}':'0'})
         self.assertContains(response, 'Тест пройден'); self.assignment.refresh_from_db(); self.assertEqual(self.assignment.status, 'COMPLETED'); self.assertRedirects(self.client.get(reverse('test', args=[self.course.id])), reverse('course', args=[self.course.id]))
+
+    def test_test_requires_a_separate_start_screen(self):
+        self.test.time_limit_minutes = 10
+        self.test.save(update_fields=['time_limit_minutes'])
+        self.client.login(username='employee', password='test-password')
+        start_page = self.client.get(reverse('test', args=[self.course.id]))
+        self.assertContains(start_page, 'Начать тест')
+        self.assertContains(start_page, '10 мин.')
+        response = self.client.post(reverse('test_start', args=[self.course.id]))
+        self.assertRedirects(response, reverse('test', args=[self.course.id]))
+        questions = self.client.get(reverse('test', args=[self.course.id]))
+        self.assertContains(questions, self.test.questions.first().text)
+
+    def test_time_limit_blocks_an_expired_test_attempt(self):
+        self.test.time_limit_minutes = 1
+        self.test.save(update_fields=['time_limit_minutes'])
+        self.client.login(username='employee', password='test-password')
+        session = self.client.session
+        session[f'test_started_at_{self.assignment.id}'] = (timezone.now() - timedelta(minutes=2)).isoformat()
+        session.save()
+        response = self.client.get(reverse('test', args=[self.course.id]))
+        self.assertContains(response, 'Время истекло')
+        self.assertEqual(self.assignment.attempts.count(), 1)
     def test_reassignment_preserves_completed_history(self):
         self.assignment.status = 'COMPLETED'; self.assignment.completed_at = timezone.now(); self.assignment.save()
         self.client.login(username='methodist', password='test-password')
@@ -60,8 +83,7 @@ class LearningPortalTests(TestCase):
         self.assertContains(page, 'Попытка 1')
         self.assertContains(page, 'Попытка 2')
         self.assertContains(page, 'Назначение 2')
-        self.assertContains(page, '80%')
-        self.assertContains(page, '100%')
+        self.assertContains(page, 'Выполнена')
 
         response = self.client.get(reverse('report_excel'))
         workbook = load_workbook(BytesIO(response.content))
@@ -74,8 +96,8 @@ class LearningPortalTests(TestCase):
         self.assertIn('Назначение 2: попытка 1', headers)
         self.assertEqual(sheet.max_row, 2)
         values = [cell.value for cell in sheet[2]]
-        self.assertIn('80%', values[headers.index(first_attempt)])
-        self.assertIn('100%', values[headers.index(second_attempt)])
+        self.assertEqual('Выполнена', values[headers.index(first_attempt)])
+        self.assertEqual('Выполнена', values[headers.index(second_attempt)])
 
     def test_ten_reassignments_create_ten_distinct_history_cycles(self):
         self.assignment.delete()
@@ -200,6 +222,7 @@ class LearningPortalTests(TestCase):
 
     def test_test_options_keep_original_values_when_display_order_is_shuffled(self):
         self.client.login(username='employee', password='test-password')
+        self.client.post(reverse('test_start', args=[self.course.id]))
         response = self.client.get(reverse('test', args=[self.course.id]))
         self.assertContains(response, 'Порядок вариантов ответа меняется')
         self.assertContains(response, 'value="0"')
