@@ -631,6 +631,100 @@ def create_assignment(request):
 
 
 @login_required
+def assignment_bulk_action(request):
+    if not can_manage(request.user): return deny(request.user)
+    if request.method != 'POST': return redirect('assignments')
+    try:
+        course = Course.objects.get(pk=request.POST['course'])
+    except (Course.DoesNotExist, KeyError, TypeError, ValueError):
+        messages.error(request, 'Выберите курс для массовой операции.')
+        return redirect('assignments')
+    department_ids = request.POST.getlist('departments')
+    employee_type_ids = request.POST.getlist('employee_types')
+    if not department_ids and not employee_type_ids:
+        messages.error(request, 'Выберите хотя бы одну категорию или отделение.')
+        return redirect('assignments')
+    assignments = Assignment.objects.select_for_update().filter(
+        course=course, status__in=ACTIVE_ASSIGNMENT_STATUSES,
+        user__is_active=True,
+    )
+    if department_ids:
+        assignments = assignments.filter(user__profile__department_id__in=department_ids)
+    if employee_type_ids:
+        assignments = assignments.filter(user__profile__employee_type_id__in=employee_type_ids)
+    action = request.POST.get('action')
+    with transaction.atomic():
+        selected = list(assignments.select_related('user', 'course').prefetch_related('attempts'))
+        if not selected:
+            messages.warning(request, 'Для выбранной аудитории активных назначений этого курса не найдено.')
+            return redirect('assignments')
+        if action == 'cancel':
+            now = timezone.now()
+            for assignment in selected:
+                assignment.status = 'CANCELLED'
+                assignment.cancelled_at = now
+                assignment.cancelled_by = request.user
+            Assignment.objects.bulk_update(selected, ['status', 'cancelled_at', 'cancelled_by'])
+            AuditLog.objects.create(
+                user=request.user, action='Массовая отмена назначений',
+                object_label=f'{course.title}: {len(selected)}',
+            )
+            messages.success(request, f'Отменено назначений: {len(selected)}. История сохранена.')
+            return redirect('assignments')
+        if action != 'edit':
+            messages.error(request, 'Неизвестная массовая операция.')
+            return redirect('assignments')
+        try:
+            due_date = datetime.strptime(request.POST['due_date'], '%Y-%m-%d').date()
+            due_time = datetime.strptime(request.POST.get('due_time') or '23:59', '%H:%M').time()
+            passing_score = int(request.POST['passing_score'])
+            attempts_allowed = int(request.POST['attempts_allowed'])
+        except (KeyError, TypeError, ValueError):
+            messages.error(request, 'Проверьте дату, время, порог и количество попыток.')
+            return redirect('assignments')
+        if not 1 <= passing_score <= 100 or attempts_allowed < 1:
+            messages.error(request, 'Порог должен быть от 1 до 100%, а количество попыток — не меньше одной.')
+            return redirect('assignments')
+        for assignment in selected:
+            attempts_used = len(assignment.attempts.all())
+            if attempts_used and passing_score != assignment.passing_score:
+                messages.error(
+                    request,
+                    'Массовое изменение отменено: у части сотрудников уже есть попытки, '
+                    'поэтому порог менять нельзя.',
+                )
+                return redirect('assignments')
+            if attempts_allowed < attempts_used:
+                messages.error(
+                    request,
+                    'Массовое изменение отменено: новый лимит меньше числа уже использованных попыток.',
+                )
+                return redirect('assignments')
+        now = timezone.now()
+        for assignment in selected:
+            attempts_used = len(assignment.attempts.all())
+            assignment.due_date = due_date
+            assignment.due_time = due_time
+            assignment.passing_score = passing_score
+            assignment.attempts_allowed = attempts_allowed
+            if attempts_used and attempts_used >= attempts_allowed:
+                assignment.status = 'FAILED'
+            elif now > assignment.deadline:
+                assignment.status = 'OVERDUE'
+            else:
+                assignment.status = 'IN_PROGRESS' if assignment.acknowledged_at else 'ASSIGNED'
+        Assignment.objects.bulk_update(selected, [
+            'due_date', 'due_time', 'passing_score', 'attempts_allowed', 'status',
+        ])
+        AuditLog.objects.create(
+            user=request.user, action='Массовое изменение назначений',
+            object_label=f'{course.title}: {len(selected)}',
+        )
+        messages.success(request, f'Обновлено назначений: {len(selected)}.')
+    return redirect('assignments')
+
+
+@login_required
 def assignment_edit(request, pk):
     if not can_manage(request.user): return deny(request.user)
     assignment = get_object_or_404(

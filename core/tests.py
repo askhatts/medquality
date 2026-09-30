@@ -437,3 +437,113 @@ class LearningPortalTests(TestCase):
         self.client.login(username='employee', password='test-password')
         self.assertEqual(self.client.get(reverse('assignment_edit', args=[self.assignment.id])).status_code, 403)
         self.assertEqual(self.client.post(reverse('assignment_cancel', args=[self.assignment.id])).status_code, 403)
+
+    def test_bulk_edit_uses_department_and_category_intersection(self):
+        nurse_type = EmployeeType.objects.create(name='Медсестра для массового теста')
+        nurse = User.objects.create_user('bulk-nurse', password='test-password')
+        Profile.objects.create(
+            user=nurse, role='EMPLOYEE', department=self.employee.profile.department,
+            employee_type=nurse_type, position='Медсестра',
+        )
+        nurse_assignment = Assignment.objects.create(
+            user=nurse, course=self.course, test_version=self.test,
+            due_date=timezone.localdate() + timedelta(days=1), passing_score=80,
+            attempts_allowed=1,
+        )
+        other_department = Department.objects.create(name='Другое массовое отделение')
+        other_doctor = User.objects.create_user('bulk-other-doctor', password='test-password')
+        Profile.objects.create(
+            user=other_doctor, role='EMPLOYEE', department=other_department,
+            employee_type=self.employee.profile.employee_type, position='Врач',
+        )
+        other_assignment = Assignment.objects.create(
+            user=other_doctor, course=self.course, test_version=self.test,
+            due_date=timezone.localdate() + timedelta(days=1), passing_score=80,
+            attempts_allowed=1,
+        )
+        self.client.login(username='methodist', password='test-password')
+        due_date = timezone.localdate() + timedelta(days=20)
+        response = self.client.post(reverse('assignment_bulk'), {
+            'action': 'edit', 'course': self.course.id,
+            'departments': [self.employee.profile.department_id],
+            'employee_types': [self.employee.profile.employee_type_id],
+            'due_date': due_date.isoformat(), 'due_time': '20:30',
+            'passing_score': 90, 'attempts_allowed': 2,
+        }, follow=True)
+        self.assertContains(response, 'Обновлено назначений: 1')
+        self.assignment.refresh_from_db()
+        nurse_assignment.refresh_from_db()
+        other_assignment.refresh_from_db()
+        self.assertEqual(self.assignment.passing_score, 90)
+        self.assertEqual(self.assignment.due_time.strftime('%H:%M'), '20:30')
+        self.assertEqual(nurse_assignment.passing_score, 80)
+        self.assertEqual(other_assignment.passing_score, 80)
+
+    def test_bulk_cancel_by_category_preserves_other_categories(self):
+        nurse_type = EmployeeType.objects.create(name='Медсестра для отмены')
+        nurse = User.objects.create_user('cancel-nurse', password='test-password')
+        Profile.objects.create(
+            user=nurse, role='EMPLOYEE', department=self.employee.profile.department,
+            employee_type=nurse_type, position='Медсестра',
+        )
+        nurse_assignment = Assignment.objects.create(
+            user=nurse, course=self.course, test_version=self.test,
+            due_date=timezone.localdate() + timedelta(days=1), passing_score=80,
+            attempts_allowed=1,
+        )
+        self.client.login(username='methodist', password='test-password')
+        response = self.client.post(reverse('assignment_bulk'), {
+            'action': 'cancel', 'course': self.course.id,
+            'employee_types': [self.employee.profile.employee_type_id],
+        }, follow=True)
+        self.assertContains(response, 'Отменено назначений: 1')
+        self.assignment.refresh_from_db()
+        nurse_assignment.refresh_from_db()
+        self.assertEqual(self.assignment.status, 'CANCELLED')
+        self.assertEqual(nurse_assignment.status, 'ASSIGNED')
+
+    def test_bulk_edit_is_atomic_when_an_attempt_blocks_threshold_change(self):
+        colleague = User.objects.create_user('bulk-colleague', password='test-password')
+        Profile.objects.create(
+            user=colleague, role='EMPLOYEE', department=self.employee.profile.department,
+            employee_type=self.employee.profile.employee_type, position='Врач',
+        )
+        colleague_assignment = Assignment.objects.create(
+            user=colleague, course=self.course, test_version=self.test,
+            due_date=timezone.localdate() + timedelta(days=1), passing_score=80,
+            attempts_allowed=2,
+        )
+        TestAttempt.objects.create(
+            assignment=self.assignment, number=1, correct_answers=0,
+            score=40, passed=False,
+        )
+        self.assignment.attempts_allowed = 2
+        self.assignment.save(update_fields=['attempts_allowed'])
+        self.client.login(username='methodist', password='test-password')
+        response = self.client.post(reverse('assignment_bulk'), {
+            'action': 'edit', 'course': self.course.id,
+            'employee_types': [self.employee.profile.employee_type_id],
+            'due_date': (timezone.localdate() + timedelta(days=30)).isoformat(),
+            'due_time': '19:00', 'passing_score': 90, 'attempts_allowed': 3,
+        }, follow=True)
+        self.assertContains(response, 'Массовое изменение отменено')
+        self.assignment.refresh_from_db()
+        colleague_assignment.refresh_from_db()
+        self.assertEqual(self.assignment.passing_score, 80)
+        self.assertEqual(colleague_assignment.passing_score, 80)
+        self.assertEqual(colleague_assignment.attempts_allowed, 2)
+
+    def test_bulk_action_requires_audience_and_is_forbidden_to_employee(self):
+        self.client.login(username='methodist', password='test-password')
+        response = self.client.post(reverse('assignment_bulk'), {
+            'action': 'cancel', 'course': self.course.id,
+        }, follow=True)
+        self.assertContains(response, 'Выберите хотя бы одну категорию или отделение')
+        self.assignment.refresh_from_db()
+        self.assertEqual(self.assignment.status, 'ASSIGNED')
+        self.client.logout()
+        self.client.login(username='employee', password='test-password')
+        self.assertEqual(self.client.post(reverse('assignment_bulk'), {
+            'action': 'cancel', 'course': self.course.id,
+            'employee_types': [self.employee.profile.employee_type_id],
+        }).status_code, 403)

@@ -17,6 +17,22 @@
   </div>
   <p><button>Назначить обучение</button></p>
 </form>
+<form class="card" method="post" action="{% url 'assignment_bulk' %}" id="bulk-assignment-form">{% csrf_token %}
+  <h2>Массовое изменение и отмена</h2>
+  <p class="muted">Операция применяется только к активным назначениям выбранного курса. Категория и отделение вместе работают как пересечение.</p>
+  <div class="form-grid">
+    <div><label>Курс</label><select name="course" required><option value="">Выберите курс</option>{% for c in courses %}<option value="{{ c.id }}">{{ c.direction }} — {{ c.title }}</option>{% endfor %}</select></div>
+    <div><label>Дата окончания</label><input name="due_date" type="date"></div>
+    <div><label>Время окончания</label><input name="due_time" type="time" value="23:59"></div>
+    <div><label>Порог прохождения, %</label><input name="passing_score" type="number" min="1" max="100" value="80"></div>
+    <div><label>Количество попыток</label><input name="attempts_allowed" type="number" min="1" value="3"></div>
+  </div>
+  <div class="grid">
+    <div><label>Категории сотрудников</label><div class="checkboxes">{% for t in types %}<label><input type="checkbox" name="employee_types" value="{{ t.id }}" style="width:auto"> {{ t.name }}</label>{% endfor %}</div></div>
+    <div><label>Отделы / отделения</label><div class="checkboxes">{% for d in departments %}<label><input type="checkbox" name="departments" value="{{ d.id }}" style="width:auto"> {{ d.name }}</label>{% endfor %}</div></div>
+  </div>
+  <p class="actions"><button name="action" value="edit">Изменить все выбранные назначения</button><button class="btn danger" name="action" value="cancel" formnovalidate onclick="return confirm('Отменить все активные назначения выбранного курса для этой аудитории? История останется в отчётах.');">Отменить все выбранные назначения</button></p>
+</form>
 <div class="card" style="overflow-x:auto"><h2>Журнал назначений</h2><table>
   <tr><th>№</th><th>Сотрудник</th><th>Курс</th><th>Срок</th><th>Порог / попытки</th><th>Статус</th><th>Действия</th></tr>
   {% for a in assignments %}<tr>

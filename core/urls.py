@@ -37,6 +37,7 @@ urlpatterns = [
     path('password-requests/<int:pk>/dismiss/', views.dismiss_password_request, name='password_request_dismiss'),
     path('assignments/', views.assignment_list, name='assignments'),
     path('assignments/new/', views.create_assignment, name='assignment_new'),
+    path('assignments/bulk/', views.assignment_bulk_action, name='assignment_bulk'),
     path('assignments/<int:pk>/edit/', views.assignment_edit, name='assignment_edit'),
     path('assignments/<int:pk>/cancel/', views.assignment_cancel, name='assignment_cancel'),
     path('reports/', views.reports, name='reports'),
