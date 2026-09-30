@@ -120,7 +120,7 @@ def visible_assignments(user):
 
 
 def filtered_assignments(request):
-    assignments = visible_assignments(request.user)
+    assignments = visible_assignments(request.user).exclude(status='CANCELLED')
     for field, lookup in [('direction','course__direction_id'),('requirement','course__quality_requirements__id'),('course','course_id'),('department','user__profile__department_id'),('employee','user_id')]:
         value = request.GET.get(field)
         if value: assignments = assignments.filter(**{lookup: value})
@@ -131,11 +131,88 @@ def filtered_assignments(request):
 
 @login_required
 def dashboard(request):
-    p = profile(request.user); assignments = visible_assignments(request.user)
+    p = profile(request.user)
     if p.role == 'EMPLOYEE': return redirect('directions')
     people = Profile.objects.filter(user__is_active=True)
     if p.role == 'HEAD': people = people.filter(department=p.department)
-    return render(request, 'core/dashboard.html', {'profile': p, 'assignments': assignments[:8], 'overdue': [a for a in assignments if a.is_overdue], 'completed': assignments.filter(status='COMPLETED').count(), 'in_progress': assignments.filter(status='IN_PROGRESS').count(), 'assigned': assignments.filter(status='ASSIGNED').count(), 'people_count': people.count()})
+
+    # A reassignment creates a new cycle. Count only the latest live cycle for
+    # each employee and course here; all earlier cycles remain in the report.
+    current = {}
+    for assignment in visible_assignments(request.user).filter(user__is_active=True):
+        current.setdefault((assignment.user_id, assignment.course_id), assignment)
+    assignments = [
+        assignment for assignment in current.values()
+        if assignment.status not in ('CANCELLED', 'REASSIGNED')
+    ]
+    statuses = {'ASSIGNED': 0, 'IN_PROGRESS': 0, 'OVERDUE': 0, 'FAILED': 0, 'COMPLETED': 0}
+    course_rows = {}
+    for assignment in assignments:
+        status = 'OVERDUE' if assignment.is_overdue else assignment.status
+        statuses[status] += 1
+        row = course_rows.setdefault(assignment.course_id, {
+            'course': assignment.course, 'total': 0,
+            'assigned': 0, 'in_progress': 0, 'overdue': 0,
+            'failed': 0, 'completed': 0, 'assignments': [],
+        })
+        row['total'] += 1
+        row[status.lower()] += 1
+        row['assignments'].append({'assignment': assignment, 'status': status})
+
+    if p.role in ('ADMIN', 'METHODIST'):
+        for course in Course.objects.filter(active=True).select_related('direction'):
+            course_rows.setdefault(course.id, {
+                'course': course, 'total': 0,
+                'assigned': 0, 'in_progress': 0, 'overdue': 0,
+                'failed': 0, 'completed': 0, 'assignments': [],
+            })
+    courses = sorted(course_rows.values(), key=lambda row: row['course'].title.casefold())
+    for row in courses:
+        row['completion_rate'] = round(row['completed'] * 100 / row['total']) if row['total'] else 0
+    selected_course = request.GET.get('course', '')
+    selected_row = next(
+        (row for row in courses if str(row['course'].id) == selected_course), None
+    )
+    if selected_row:
+        selected_row['assignments'].sort(key=lambda item: (
+            (item['assignment'].user.get_full_name() or item['assignment'].user.username).casefold(),
+            item['assignment'].user_id,
+        ))
+        selected_row['departments'] = sorted({
+            (item['assignment'].user.profile.department_id,
+             item['assignment'].user.profile.department.name)
+            for item in selected_row['assignments']
+            if item['assignment'].user.profile.department_id
+        }, key=lambda department: department[1].casefold())
+        selected_row['types'] = sorted({
+            (item['assignment'].user.profile.employee_type_id,
+             item['assignment'].user.profile.employee_type.name)
+            for item in selected_row['assignments']
+            if item['assignment'].user.profile.employee_type_id
+        }, key=lambda employee_type: employee_type[1].casefold())
+        department = request.GET.get('department', '')
+        employee_type = request.GET.get('employee_type', '')
+        status = request.GET.get('status', '')
+        search = request.GET.get('q', '').strip().casefold()
+        selected_row['display_assignments'] = [
+            item for item in selected_row['assignments']
+            if (not department or str(item['assignment'].user.profile.department_id) == department)
+            and (not employee_type or str(item['assignment'].user.profile.employee_type_id) == employee_type)
+            and (not status or item['status'] == status)
+            and (not search or search in (
+                item['assignment'].user.get_full_name() + ' ' + item['assignment'].user.username
+            ).casefold())
+        ]
+        selected_row['display_count'] = len(selected_row['display_assignments'])
+    people_with_courses = len({assignment.user_id for assignment in assignments})
+    return render(request, 'core/dashboard.html', {
+        'profile': p, 'people_count': people.count(),
+        'people_with_courses': people_with_courses,
+        'people_without_courses': max(0, people.count() - people_with_courses),
+        'assignment_count': len(assignments), 'course_count': len(courses),
+        'assigned_course_count': sum(row['total'] > 0 for row in courses),
+        'statuses': statuses, 'course_rows': courses, 'selected_row': selected_row,
+    })
 
 
 @login_required
@@ -669,7 +746,7 @@ def assignment_bulk_action(request):
                 user=request.user, action='Массовая отмена назначений',
                 object_label=f'{course.title}: {len(selected)}',
             )
-            messages.success(request, f'Отменено назначений: {len(selected)}. История сохранена.')
+            messages.success(request, f'Отменено назначений: {len(selected)}. Записи сохранены в журнале назначений и скрыты из отчёта.')
             return redirect('assignments')
         if action != 'edit':
             messages.error(request, 'Неизвестная массовая операция.')
@@ -792,7 +869,7 @@ def assignment_cancel(request, pk):
         user=request.user, action='Назначение отменено',
         object_label=f'#{assignment.id} {assignment.user.username}: {assignment.course.title}',
     )
-    messages.success(request, 'Назначение отменено. История сохранена.')
+    messages.success(request, 'Назначение отменено. Запись сохранена в журнале назначений и скрыта из отчёта.')
     return redirect('assignments')
 
 

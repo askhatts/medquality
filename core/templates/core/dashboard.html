@@ -1,1 +1,76 @@
-{% extends 'core/base.html' %}{% block content %}<div class="topline"><div><h1>Панель контроля обучения</h1><p class="muted">{% if profile.role == 'HEAD' %}Данные только по вашему отделу.{% else %}Сводные показатели по организации.{% endif %}</p></div></div><div class="grid"><div class="card"><div class="metric">{{ people_count }}</div>сотрудников</div><div class="card"><div class="metric">{{ assigned }}</div>ожидают начала</div><div class="card"><div class="metric">{{ in_progress }}</div>в процессе</div><div class="card"><div class="metric">{{ completed }}</div>завершили курс</div></div>{% if overdue %}<div class="card warn"><b>Требуют внимания:</b> {{ overdue|length }} просроченных назначений.</div>{% endif %}<div class="card"><h2>Назначения обучения</h2><table><tr><th>Сотрудник</th><th>Курс</th><th>Срок</th><th>Статус</th></tr>{% for a in assignments %}<tr><td>{{ a.user.get_full_name }}</td><td>{{ a.course.title }}</td><td>{{ a.deadline|date:'d.m.Y H:i' }}</td><td><span class="badge">{% if a.is_overdue %}Просрочено{% else %}{{ a.get_status_display }}{% endif %}</span></td></tr>{% empty %}<tr><td colspan="4">Назначений пока нет.</td></tr>{% endfor %}</table></div>{% endblock %}
+{% extends 'core/base.html' %}
+{% block content %}
+<div class="topline">
+  <div>
+    <h1>Панель контроля обучения</h1>
+    <p class="muted">{% if profile.role == 'HEAD' %}Только сотрудники вашего отдела.{% else %}Данные по организации.{% endif %} Для каждого сотрудника и курса учитывается последний цикл обучения. Отменённые назначения не учитываются.</p>
+  </div>
+  <a class="btn secondary" href="{% url 'reports' %}">История и Excel</a>
+</div>
+
+<div class="grid">
+  <div class="card"><div class="metric">{{ people_count }}</div>активных пользователей</div>
+  <div class="card"><div class="metric">{{ people_with_courses }}</div>пользователей с назначениями</div>
+  <div class="card"><div class="metric">{{ people_without_courses }}</div>без действующих назначений</div>
+  <div class="card"><div class="metric">{{ assigned_course_count }}</div>курсов с назначениями</div>
+  <div class="card"><div class="metric">{{ assignment_count }}</div>действующих назначений</div>
+</div>
+
+<div class="card">
+  <h2>Состояние назначений</h2>
+  <p class="muted">Здесь считаются назначения, поэтому у сотрудника с несколькими курсами может быть несколько записей. Исторические циклы смотрите в отчёте.</p>
+  <div class="grid">
+    <div><div class="metric">{{ statuses.ASSIGNED }}</div>не начали</div>
+    <div><div class="metric">{{ statuses.IN_PROGRESS }}</div>в процессе</div>
+    <div><div class="metric">{{ statuses.COMPLETED }}</div>завершили</div>
+    <div><div class="metric">{{ statuses.OVERDUE }}</div>просрочили</div>
+    <div><div class="metric">{{ statuses.FAILED }}</div>не прошли</div>
+  </div>
+</div>
+
+<div class="card" style="overflow-x:auto">
+  <h2>Курсы и охват</h2>
+  <p class="muted">Нажмите «Сотрудники», чтобы увидеть, кому назначен конкретный курс и какой у каждого результат.</p>
+  <table>
+    <thead><tr><th>Курс</th><th>Назначено</th><th>Не начали</th><th>В процессе</th><th>Завершили</th><th>Выполнение</th><th>Просрочили</th><th>Не прошли</th><th></th></tr></thead>
+    <tbody>{% for row in course_rows %}
+      <tr>
+        <td><b>{{ row.course.title }}</b><br><small class="muted">{{ row.course.direction.title }}</small></td>
+        <td>{{ row.total }}</td><td>{{ row.assigned }}</td><td>{{ row.in_progress }}</td>
+        <td>{{ row.completed }}</td><td>{{ row.completion_rate }}%</td><td>{{ row.overdue }}</td><td>{{ row.failed }}</td>
+        <td>{% if row.total %}<a class="btn secondary" href="?course={{ row.course.id }}#course-detail">Сотрудники</a>{% else %}<span class="muted">Нет назначений</span>{% endif %}</td>
+      </tr>
+    {% empty %}<tr><td colspan="9">Курсов пока нет.</td></tr>{% endfor %}</tbody>
+  </table>
+</div>
+
+{% if selected_row %}
+<div class="card" id="course-detail" style="overflow-x:auto">
+  <div class="topline">
+    <div><h2>{{ selected_row.course.title }}</h2><p class="muted">Назначено сотрудникам: {{ selected_row.total }}. Показано по фильтрам: {{ selected_row.display_count }}.</p></div>
+    <a class="btn secondary" href="{% url 'dashboard' %}">Свернуть список</a>
+  </div>
+  <form method="get" class="form-grid">
+    <input type="hidden" name="course" value="{{ selected_row.course.id }}">
+    <div><label>Поиск по ФИО или логину</label><input name="q" value="{{ request.GET.q }}" placeholder="Введите ФИО или логин"></div>
+    <div><label>Отделение</label><select name="department"><option value="">Все</option>{% for id, name in selected_row.departments %}<option value="{{ id }}" {% if request.GET.department == id|stringformat:'s' %}selected{% endif %}>{{ name }}</option>{% endfor %}</select></div>
+    <div><label>Категория</label><select name="employee_type"><option value="">Все</option>{% for id, name in selected_row.types %}<option value="{{ id }}" {% if request.GET.employee_type == id|stringformat:'s' %}selected{% endif %}>{{ name }}</option>{% endfor %}</select></div>
+    <div><label>Состояние</label><select name="status"><option value="">Все</option><option value="ASSIGNED" {% if request.GET.status == 'ASSIGNED' %}selected{% endif %}>Не начали</option><option value="IN_PROGRESS" {% if request.GET.status == 'IN_PROGRESS' %}selected{% endif %}>В процессе</option><option value="COMPLETED" {% if request.GET.status == 'COMPLETED' %}selected{% endif %}>Завершили</option><option value="OVERDUE" {% if request.GET.status == 'OVERDUE' %}selected{% endif %}>Просрочили</option><option value="FAILED" {% if request.GET.status == 'FAILED' %}selected{% endif %}>Не прошли</option></select></div>
+    <div><button>Показать сотрудников</button></div>
+  </form>
+  <table>
+    <thead><tr><th>Сотрудник</th><th>Категория</th><th>Отделение</th><th>Назначено</th><th>Срок</th><th>Состояние</th></tr></thead>
+    <tbody>{% for item in selected_row.display_assignments %}
+      <tr>
+        <td><b>{{ item.assignment.user.get_full_name|default:item.assignment.user.username }}</b><br><small class="muted">{{ item.assignment.user.username }}</small></td>
+        <td>{{ item.assignment.user.profile.employee_type|default:'—' }}</td>
+        <td>{{ item.assignment.user.profile.department|default:'—' }}</td>
+        <td>{{ item.assignment.assigned_at|date:'d.m.Y' }}</td>
+        <td>{{ item.assignment.deadline|date:'d.m.Y H:i' }}</td>
+        <td><span class="badge">{% if item.status == 'OVERDUE' %}Просрочено{% else %}{{ item.assignment.get_status_display }}{% endif %}</span></td>
+      </tr>
+    {% empty %}<tr><td colspan="6">По выбранным фильтрам сотрудников нет.</td></tr>{% endfor %}</tbody>
+  </table>
+</div>
+{% endif %}
+{% endblock %}

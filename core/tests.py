@@ -407,7 +407,7 @@ class LearningPortalTests(TestCase):
         response = self.client.post(
             reverse('assignment_cancel', args=[self.assignment.id]), follow=True,
         )
-        self.assertContains(response, 'Назначение отменено. История сохранена')
+        self.assertContains(response, 'Назначение отменено. Запись сохранена в журнале назначений')
         self.assignment.refresh_from_db()
         self.assertEqual(self.assignment.status, 'CANCELLED')
         self.assertIsNotNone(self.assignment.cancelled_at)
@@ -437,6 +437,67 @@ class LearningPortalTests(TestCase):
         self.client.login(username='employee', password='test-password')
         self.assertEqual(self.client.get(reverse('assignment_edit', args=[self.assignment.id])).status_code, 403)
         self.assertEqual(self.client.post(reverse('assignment_cancel', args=[self.assignment.id])).status_code, 403)
+
+    def test_cancelled_assignments_are_excluded_from_report_and_excel(self):
+        self.assignment.status = 'CANCELLED'
+        self.assignment.save(update_fields=['status'])
+        self.client.login(username='methodist', password='test-password')
+        page = self.client.get(reverse('reports'))
+        self.assertEqual(page.context['report_rows'], [])
+        workbook = load_workbook(BytesIO(self.client.get(reverse('report_excel')).content))
+        self.assertEqual(workbook.active.max_row, 1)
+
+    def test_dashboard_shows_latest_course_cycle_and_employee_drilldown(self):
+        self.assignment.status = 'REASSIGNED'
+        self.assignment.save(update_fields=['status'])
+        latest = Assignment.objects.create(
+            user=self.employee, course=self.course, test_version=self.test,
+            due_date=timezone.localdate() + timedelta(days=30),
+            passing_score=80, attempts_allowed=2,
+        )
+        self.client.login(username='methodist', password='test-password')
+        page = self.client.get(reverse('dashboard'), {'course': self.course.id})
+        self.assertEqual(page.context['assignment_count'], 1)
+        self.assertEqual(page.context['people_with_courses'], 1)
+        self.assertEqual(page.context['statuses']['ASSIGNED'], 1)
+        self.assertEqual(page.context['selected_row']['total'], 1)
+        self.assertEqual(page.context['selected_row']['assignments'][0]['assignment'].id, latest.id)
+        self.assertContains(page, self.employee.username)
+
+    def test_dashboard_omits_cancelled_latest_cycle(self):
+        self.assignment.status = 'COMPLETED'
+        self.assignment.save(update_fields=['status'])
+        Assignment.objects.create(
+            user=self.employee, course=self.course, test_version=self.test,
+            due_date=timezone.localdate() + timedelta(days=30),
+            passing_score=80, attempts_allowed=2, status='CANCELLED',
+        )
+        self.client.login(username='methodist', password='test-password')
+        page = self.client.get(reverse('dashboard'))
+        self.assertEqual(page.context['assignment_count'], 0)
+        self.assertEqual(page.context['statuses']['COMPLETED'], 0)
+
+    def test_head_dashboard_only_includes_own_department(self):
+        other_department = Department.objects.create(name='Иное отделение для аналитики')
+        outsider = User.objects.create_user('dashboard-outsider', password='test-password')
+        Profile.objects.create(
+            user=outsider, role='EMPLOYEE', department=other_department,
+            employee_type=self.employee.profile.employee_type, position='Врач',
+        )
+        Assignment.objects.create(
+            user=outsider, course=self.course, test_version=self.test,
+            due_date=timezone.localdate() + timedelta(days=30),
+        )
+        head = User.objects.create_user('dashboard-head', password='test-password')
+        Profile.objects.create(
+            user=head, role='HEAD', department=self.employee.profile.department,
+            employee_type=self.employee.profile.employee_type, position='Заведующий',
+        )
+        self.client.login(username='dashboard-head', password='test-password')
+        page = self.client.get(reverse('dashboard'), {'course': self.course.id})
+        self.assertEqual(page.context['assignment_count'], 1)
+        self.assertContains(page, self.employee.username)
+        self.assertNotContains(page, outsider.username)
 
     def test_bulk_edit_uses_department_and_category_intersection(self):
         nurse_type = EmployeeType.objects.create(name='Медсестра для массового теста')
