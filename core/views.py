@@ -9,6 +9,8 @@ from django.contrib.auth import authenticate, login, logout, update_session_auth
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.forms import PasswordChangeForm
 from django.contrib.auth.models import User
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import Prefetch
 from django.http import FileResponse, Http404, HttpResponse, HttpResponseForbidden
@@ -19,7 +21,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 
 from .models import (Assignment, AuditLog, Course, Department, EmployeeType,
-                     InternalDocument, Lesson, Profile, QualityDirection,
+                     InternalDocument, Lesson, PasswordResetRequest, Profile, QualityDirection,
                      QualityRequirement, Question, Test, TestAttempt)
 
 
@@ -29,6 +31,7 @@ MAX_UPLOAD_SIZE = 15 * 1024 * 1024
 def profile(user): return Profile.objects.get_or_create(user=user)[0]
 def role_in(user, *roles): return profile(user).role in roles
 def can_manage(user): return role_in(user, 'ADMIN', 'METHODIST')
+def can_manage_people(user): return role_in(user, 'ADMIN')
 def is_head(user): return role_in(user, 'HEAD')
 def deny(user): return HttpResponseForbidden('Недостаточно прав для этого раздела.')
 
@@ -71,6 +74,19 @@ def login_view(request):
             return redirect('password' if profile(user).force_password_change else 'dashboard')
         error = 'Неверный логин или пароль.'
     return render(request, 'core/login.html', {'error': error})
+
+
+def forgot_password(request):
+    submitted = False
+    if request.method == 'POST':
+        submitted = True
+        username = request.POST.get('username', '').strip()
+        user = User.objects.filter(
+            username__iexact=username, is_active=True, profile__isnull=False,
+        ).first()
+        if user:
+            PasswordResetRequest.objects.get_or_create(user=user, status='PENDING')
+    return render(request, 'core/forgot_password.html', {'submitted': submitted})
 
 
 def logout_view(request): logout(request); return redirect('login')
@@ -493,27 +509,88 @@ def document_form(request, pk=None):
 
 @login_required
 def employees(request):
-    if not can_manage(request.user): return deny(request.user)
+    if not can_manage_people(request.user): return deny(request.user)
     return render(request, 'core/employees.html', {'employees': Profile.objects.select_related('user','department','employee_type').order_by('user__last_name'), 'departments': Department.objects.all(), 'types': EmployeeType.objects.all()})
 
 
 @login_required
 def employee_form(request, pk=None):
-    if not can_manage(request.user): return deny(request.user)
+    if not can_manage_people(request.user): return deny(request.user)
     target = get_object_or_404(Profile, pk=pk) if pk else None
     if request.method == 'POST':
         username=request.POST['username'].strip(); user=target.user if target else User(username=username)
         user.username=username; user.first_name=request.POST['first_name'].strip(); user.last_name=request.POST['last_name'].strip()
         if not target: user.set_password(request.POST.get('password') or User.objects.make_random_password()); user.save(); target=Profile(user=user,force_password_change=True)
         else: user.save()
-        target.role=request.POST['role']; target.department_id=request.POST['department']; target.employee_type_id=request.POST['employee_type']; target.position=request.POST['position'].strip(); target.employee_number=request.POST.get('employee_number','').strip(); target.phone=request.POST.get('phone','').strip(); target.save(); return redirect('employees')
+        target.role=request.POST['role']; target.department_id=request.POST['department']; target.employee_type_id=request.POST['employee_type']; target.position=request.POST['position'].strip(); target.employee_number=request.POST.get('employee_number','').strip(); target.phone=request.POST.get('phone','').strip(); target.save()
+        AuditLog.objects.create(user=request.user, action='Профиль сотрудника сохранён', object_label=user.username)
+        messages.success(request, 'Профиль сотрудника сохранён.')
+        return redirect('employees')
     return render(request,'core/employee_form.html',{'employee':target,'departments':Department.objects.all(),'types':EmployeeType.objects.all(),'roles':Profile.ROLES})
+
+
+@login_required
+def password_requests(request):
+    if not can_manage_people(request.user): return deny(request.user)
+    requests = PasswordResetRequest.objects.filter(status='PENDING').select_related(
+        'user', 'user__profile', 'user__profile__department', 'user__profile__employee_type',
+    )
+    return render(request, 'core/password_requests.html', {'password_requests': requests})
+
+
+@login_required
+def reset_employee_password(request, pk):
+    if not can_manage_people(request.user): return deny(request.user)
+    target = get_object_or_404(Profile.objects.select_related('user'), pk=pk)
+    if request.method != 'POST': return redirect('employee_edit', pk=pk)
+    if target.user_id == request.user.id:
+        messages.error(request, 'Для смены собственного пароля используйте страницу смены пароля.')
+        return redirect('employee_edit', pk=pk)
+    password1 = request.POST.get('new_password1', '')
+    password2 = request.POST.get('new_password2', '')
+    if password1 != password2:
+        messages.error(request, 'Введённые пароли не совпадают.')
+        return redirect('employee_edit', pk=pk)
+    try:
+        validate_password(password1, target.user)
+    except ValidationError as error:
+        for message in error.messages: messages.error(request, message)
+        return redirect('employee_edit', pk=pk)
+    target.user.set_password(password1)
+    target.user.save(update_fields=['password'])
+    target.force_password_change = True
+    target.save(update_fields=['force_password_change'])
+    PasswordResetRequest.objects.filter(user=target.user, status='PENDING').update(
+        status='COMPLETED', resolved_at=timezone.now(), resolved_by=request.user,
+    )
+    AuditLog.objects.create(
+        user=request.user, action='Выдан временный пароль', object_label=target.user.username,
+    )
+    messages.success(request, 'Временный пароль установлен. При следующем входе сотрудник должен его изменить.')
+    return redirect('employee_edit', pk=pk)
+
+
+@login_required
+def dismiss_password_request(request, pk):
+    if not can_manage_people(request.user): return deny(request.user)
+    password_request = get_object_or_404(PasswordResetRequest, pk=pk, status='PENDING')
+    if request.method == 'POST':
+        password_request.status = 'DISMISSED'
+        password_request.resolved_at = timezone.now()
+        password_request.resolved_by = request.user
+        password_request.save(update_fields=['status', 'resolved_at', 'resolved_by'])
+        AuditLog.objects.create(
+            user=request.user, action='Запрос пароля закрыт без смены',
+            object_label=password_request.user.username,
+        )
+        messages.success(request, 'Запрос закрыт без смены пароля.')
+    return redirect('password_requests')
 
 
 @login_required
 def assignment_list(request):
     if not can_manage(request.user): return deny(request.user)
-    return render(request,'core/assignments.html',{'assignments':visible_assignments(request.user),'courses':Course.objects.filter(active=True),'departments':Department.objects.all(),'employees':Profile.objects.select_related('user').filter(user__is_active=True),'selected_course':request.GET.get('course','')})
+    return render(request,'core/assignments.html',{'assignments':visible_assignments(request.user),'courses':Course.objects.filter(active=True),'departments':Department.objects.all(),'types':EmployeeType.objects.all(),'employees':Profile.objects.select_related('user','department','employee_type').filter(user__is_active=True),'selected_course':request.GET.get('course','')})
 
 
 @login_required
@@ -524,9 +601,15 @@ def create_assignment(request):
     if not test: return HttpResponse('Сначала опубликуйте итоговый тест курса.',status=409)
     due=datetime.strptime(request.POST['due_date'],'%Y-%m-%d').date()
     due_time=datetime.strptime(request.POST.get('due_time') or '23:59','%H:%M').time()
-    user_ids=set(request.POST.getlist('users')); department_ids=request.POST.getlist('departments')
-    user_ids.update(Profile.objects.filter(department_id__in=department_ids,user__is_active=True).values_list('user_id',flat=True))
-    if not user_ids: return HttpResponse('Выберите хотя бы один отдел или одного сотрудника.',status=400)
+    user_ids=set(request.POST.getlist('users'))
+    department_ids=request.POST.getlist('departments')
+    employee_type_ids=request.POST.getlist('employee_types')
+    audience = Profile.objects.filter(user__is_active=True)
+    if department_ids: audience = audience.filter(department_id__in=department_ids)
+    if employee_type_ids: audience = audience.filter(employee_type_id__in=employee_type_ids)
+    if department_ids or employee_type_ids:
+        user_ids.update(audience.values_list('user_id',flat=True))
+    if not user_ids: return HttpResponse('Выберите хотя бы одну категорию, отделение или сотрудника.',status=400)
     values={'due_date':due,'due_time':due_time,'passing_score':int(request.POST['passing_score']),'attempts_allowed':int(request.POST['attempts_allowed']),'test_version':test}
     for user_id in user_ids:
         Assignment.objects.filter(
@@ -575,7 +658,7 @@ def report_excel(request):
     if role_in(request.user,'EMPLOYEE'): return deny(request.user)
     rows, assignment_numbers = report_rows(request)
     wb=Workbook(); ws=wb.active; ws.title='История обучения'
-    headers=['Сотрудник','Тип','Отдел / отделение','Должность']
+    headers=['Сотрудник','Категория','Отдел / отделение','Должность']
     for assignment_number in assignment_numbers:
         headers.append(f'Назначение {assignment_number}')
     ws.append(headers); fill=PatternFill('solid',fgColor='103B53')

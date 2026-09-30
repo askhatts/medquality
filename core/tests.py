@@ -8,13 +8,14 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 from openpyxl import load_workbook
-from .models import Assignment, Course, Department, EmployeeType, InternalDocument, Lesson, Profile, QualityDirection, Question, Test, TestAttempt
+from .models import Assignment, Course, Department, EmployeeType, InternalDocument, Lesson, PasswordResetRequest, Profile, QualityDirection, Question, Test, TestAttempt
 
 class LearningPortalTests(TestCase):
     def setUp(self):
         dep = Department.objects.create(name='Тестовое отделение'); kind = EmployeeType.objects.create(name='Медицинский')
         self.employee = User.objects.create_user('employee', password='test-password'); Profile.objects.create(user=self.employee, role='EMPLOYEE', department=dep, employee_type=kind, position='Врач')
         methodist = User.objects.create_user('methodist', password='test-password'); Profile.objects.create(user=methodist, role='METHODIST', department=dep, employee_type=kind, position='Методист')
+        self.admin = User.objects.create_user('sysadmin', password='admin-password'); Profile.objects.create(user=self.admin, role='ADMIN', position='Системный администратор')
         direction = QualityDirection.objects.create(title='Безопасность пациента'); self.course = Course.objects.create(direction=direction, title='Тестовый курс')
         self.test = Test.objects.create(course=self.course, title='Итоговый тест', status='PUBLISHED'); Question.objects.create(test=self.test, text='Верный вариант?', options=['Да','Нет'], correct_index=0, correct_indexes=[0])
         self.assignment = Assignment.objects.create(user=self.employee, course=self.course, test_version=self.test, due_date=timezone.localdate()+timedelta(days=1), passing_score=80, attempts_allowed=1)
@@ -257,4 +258,108 @@ class LearningPortalTests(TestCase):
         self.assertEqual(
             list(test.questions.values_list('correct_index', flat=True)),
             [1, 1, 1, 0, 2, 1, 1, 2, 1, 1],
+        )
+
+    def test_category_and_department_assignment_uses_intersection(self):
+        doctor = EmployeeType.objects.get(name='Врач')
+        self.employee.profile.employee_type = doctor
+        self.employee.profile.save(update_fields=['employee_type'])
+        nurse_type = EmployeeType.objects.get(name='Медсестра')
+        other_department = Department.objects.create(name='Другое отделение')
+        nurse = User.objects.create_user('nurse', password='test-password')
+        Profile.objects.create(
+            user=nurse, role='EMPLOYEE', department=self.employee.profile.department,
+            employee_type=nurse_type, position='Медсестра',
+        )
+        other_doctor = User.objects.create_user('other-doctor', password='test-password')
+        Profile.objects.create(
+            user=other_doctor, role='EMPLOYEE', department=other_department,
+            employee_type=doctor, position='Врач',
+        )
+        self.assignment.delete()
+        self.client.login(username='methodist', password='test-password')
+        response = self.client.post(reverse('assignment_new'), {
+            'course': self.course.id, 'due_date': '2030-01-01',
+            'due_time': '22:00', 'passing_score': 80, 'attempts_allowed': 2,
+            'departments': [self.employee.profile.department_id],
+            'employee_types': [doctor.id],
+        })
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(Assignment.objects.filter(user=self.employee, course=self.course).exists())
+        self.assertFalse(Assignment.objects.filter(user=nurse, course=self.course).exists())
+        self.assertFalse(Assignment.objects.filter(user=other_doctor, course=self.course).exists())
+
+    def test_category_only_assignment_targets_that_category(self):
+        nurse_type = EmployeeType.objects.get(name='Медсестра')
+        nurse = User.objects.create_user('nurse', password='test-password')
+        Profile.objects.create(
+            user=nurse, role='EMPLOYEE', department=self.employee.profile.department,
+            employee_type=nurse_type, position='Медсестра',
+        )
+        self.assignment.delete()
+        self.client.login(username='methodist', password='test-password')
+        self.client.post(reverse('assignment_new'), {
+            'course': self.course.id, 'due_date': '2030-01-01',
+            'due_time': '22:00', 'passing_score': 80, 'attempts_allowed': 2,
+            'employee_types': [nurse_type.id],
+        })
+        self.assertTrue(Assignment.objects.filter(user=nurse, course=self.course).exists())
+        self.assertFalse(Assignment.objects.filter(user=self.employee, course=self.course).exists())
+
+    def test_forgot_password_is_generic_and_does_not_duplicate_requests(self):
+        existing = self.client.post(reverse('forgot_password'), {'username': 'employee'})
+        repeated = self.client.post(reverse('forgot_password'), {'username': 'employee'})
+        unknown = self.client.post(reverse('forgot_password'), {'username': 'does-not-exist'})
+        confirmation = 'Запрос принят. Если такой активный логин существует'
+        self.assertContains(existing, confirmation)
+        self.assertContains(repeated, confirmation)
+        self.assertContains(unknown, confirmation)
+        self.assertEqual(
+            PasswordResetRequest.objects.filter(user=self.employee, status='PENDING').count(),
+            1,
+        )
+        self.client.login(username='sysadmin', password='admin-password')
+        self.assertContains(self.client.get(reverse('dashboard')), 'Запросы пароля: 1')
+
+    def test_admin_can_dismiss_password_request_without_reset(self):
+        password_request = PasswordResetRequest.objects.create(user=self.employee)
+        self.client.login(username='sysadmin', password='admin-password')
+        response = self.client.post(
+            reverse('password_request_dismiss', args=[password_request.id]), follow=True,
+        )
+        self.assertContains(response, 'Запрос закрыт без смены пароля')
+        password_request.refresh_from_db()
+        self.assertEqual(password_request.status, 'DISMISSED')
+        self.assertEqual(password_request.resolved_by, self.admin)
+        self.assertTrue(self.employee.check_password('test-password'))
+
+    def test_admin_resets_password_and_closes_request(self):
+        password_request = PasswordResetRequest.objects.create(user=self.employee)
+        self.client.login(username='sysadmin', password='admin-password')
+        response = self.client.post(reverse('employee_reset_password', args=[self.employee.profile.id]), {
+            'new_password1': 'temporary-2026',
+            'new_password2': 'temporary-2026',
+        }, follow=True)
+        self.assertContains(response, 'Временный пароль установлен')
+        self.employee.refresh_from_db()
+        self.employee.profile.refresh_from_db()
+        password_request.refresh_from_db()
+        self.assertFalse(self.employee.check_password('test-password'))
+        self.assertTrue(self.employee.check_password('temporary-2026'))
+        self.assertTrue(self.employee.profile.force_password_change)
+        self.assertEqual(password_request.status, 'COMPLETED')
+        self.client.logout()
+        login_response = self.client.post(reverse('login'), {
+            'username': 'employee', 'password': 'temporary-2026',
+        })
+        self.assertRedirects(login_response, reverse('password'))
+
+    def test_methodist_cannot_manage_employee_profiles_or_passwords(self):
+        self.client.login(username='methodist', password='test-password')
+        self.assertEqual(self.client.get(reverse('employees')).status_code, 403)
+        self.assertEqual(
+            self.client.post(reverse('employee_reset_password', args=[self.employee.profile.id]), {
+                'new_password1': 'temporary-2026', 'new_password2': 'temporary-2026',
+            }).status_code,
+            403,
         )

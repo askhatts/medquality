@@ -11,20 +11,47 @@ class Department(models.Model):
     def __str__(self): return self.name
 
 class EmployeeType(models.Model):
-    name = models.CharField('Тип сотрудника', max_length=80, unique=True)
+    name = models.CharField('Категория сотрудника', max_length=80, unique=True)
     def __str__(self): return self.name
 
 class Profile(models.Model):
     ROLES = [('ADMIN', 'Администратор'), ('METHODIST', 'Методист'), ('HEAD', 'Руководитель отдела'), ('EMPLOYEE', 'Сотрудник')]
     user = models.OneToOneField(User, on_delete=models.CASCADE)
     role = models.CharField('Роль', max_length=12, choices=ROLES, default='EMPLOYEE')
-    employee_type = models.ForeignKey(EmployeeType, verbose_name='Тип сотрудника', null=True, blank=True, on_delete=models.SET_NULL)
+    employee_type = models.ForeignKey(EmployeeType, verbose_name='Категория сотрудника', null=True, blank=True, on_delete=models.SET_NULL)
     department = models.ForeignKey(Department, verbose_name='Отдел / отделение', null=True, blank=True, on_delete=models.SET_NULL)
     position = models.CharField('Должность', max_length=120, blank=True)
     employee_number = models.CharField('Табельный номер', max_length=60, blank=True)
     phone = models.CharField('Телефон', max_length=40, blank=True)
     force_password_change = models.BooleanField(default=False)
     def __str__(self): return f'{self.user.get_full_name() or self.user.username} — {self.get_role_display()}'
+
+class PasswordResetRequest(models.Model):
+    STATUSES = [
+        ('PENDING', 'Ожидает'),
+        ('COMPLETED', 'Выполнен'),
+        ('DISMISSED', 'Закрыт'),
+    ]
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='password_reset_requests')
+    status = models.CharField('Статус', max_length=12, choices=STATUSES, default='PENDING')
+    requested_at = models.DateTimeField('Запрошено', auto_now_add=True)
+    resolved_at = models.DateTimeField('Обработано', null=True, blank=True)
+    resolved_by = models.ForeignKey(
+        User, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name='resolved_password_reset_requests',
+    )
+
+    class Meta:
+        ordering = ['-requested_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['user'], condition=models.Q(status='PENDING'),
+                name='unique_pending_password_reset_request',
+            ),
+        ]
+
+    def __str__(self):
+        return f'{self.user.username} — {self.get_status_display()}'
 
 class QualityDirection(models.Model):
     # Технические поля сопоставляют прежние обязательные колонки и не выводятся в портале.

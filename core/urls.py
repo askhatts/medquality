@@ -6,6 +6,7 @@ from . import views
 urlpatterns = [
     path('', views.dashboard, name='dashboard'),
     path('login/', views.login_view, name='login'),
+    path('password/forgot/', views.forgot_password, name='forgot_password'),
     path('logout/', views.logout_view, name='logout'),
     path('session/ping/', views.session_ping, name='session_ping'),
     path('password/', views.change_password, name='password'),
@@ -31,6 +32,9 @@ urlpatterns = [
     path('employees/', views.employees, name='employees'),
     path('employees/new/', views.employee_form, name='employee_new'),
     path('employees/<int:pk>/', views.employee_form, name='employee_edit'),
+    path('employees/<int:pk>/reset-password/', views.reset_employee_password, name='employee_reset_password'),
+    path('password-requests/', views.password_requests, name='password_requests'),
+    path('password-requests/<int:pk>/dismiss/', views.dismiss_password_request, name='password_request_dismiss'),
     path('assignments/', views.assignment_list, name='assignments'),
     path('assignments/new/', views.create_assignment, name='assignment_new'),
     path('reports/', views.reports, name='reports'),
