@@ -3,6 +3,7 @@ from io import BytesIO
 from django.conf import settings
 from django.contrib.auth.models import User
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.management import call_command
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
@@ -237,3 +238,23 @@ class LearningPortalTests(TestCase):
         self.assertEqual(settings.SESSION_COOKIE_AGE, 300)
         self.assertTrue(settings.SESSION_SAVE_EVERY_REQUEST)
         self.assertEqual(self.client.get(reverse('session_ping')).status_code, 204)
+
+    def test_load_mcbp2_is_idempotent(self):
+        call_command('load_mcbp2')
+        call_command('load_mcbp2')
+        course = Course.objects.get(title='МЦБП 2 — Эффективная коммуникация и перевод пациентов')
+        self.assertTrue(course.active)
+        self.assertEqual(course.lessons.count(), 3)
+        self.assertEqual(
+            list(course.lessons.values_list('order', flat=True)),
+            [1, 2, 3],
+        )
+        self.assertTrue(all(lesson.drive_embed_url for lesson in course.lessons.all()))
+        test = course.tests.get(is_current=True)
+        self.assertEqual(test.status, 'PUBLISHED')
+        self.assertEqual(test.time_limit_minutes, 10)
+        self.assertEqual(test.questions.count(), 10)
+        self.assertEqual(
+            list(test.questions.values_list('correct_index', flat=True)),
+            [1, 1, 1, 0, 2, 1, 1, 2, 1, 1],
+        )
