@@ -1,0 +1,22 @@
+{% extends 'core/base.html' %}
+{% block content %}
+<div class="topline">
+  <div><h1>Редактирование назначения</h1><p class="muted">Назначение №{{ assignment.id }}</p></div>
+  <a class="btn secondary" href="{% url 'assignments' %}">Вернуться к назначениям</a>
+</div>
+<div class="card">
+  <p><b>Сотрудник:</b> {{ assignment.user.get_full_name|default:assignment.user.username }}</p>
+  <p><b>Курс:</b> {{ assignment.course.title }}</p>
+  <p class="muted">Сотрудник и курс зафиксированы для сохранения истории. Использовано попыток: {{ attempts_used }}.</p>
+</div>
+<form class="card" method="post">{% csrf_token %}
+  <div class="form-grid">
+    <div><label>Дата окончания</label><input name="due_date" type="date" value="{{ assignment.due_date|date:'Y-m-d' }}" required></div>
+    <div><label>Время окончания</label><input name="due_time" type="time" value="{{ assignment.due_time|default_if_none:'23:59'|time:'H:i' }}" required></div>
+    <div><label>Порог прохождения, %</label><input name="passing_score" type="number" min="1" max="100" value="{{ assignment.passing_score }}" {% if attempts_used %}readonly{% endif %} required></div>
+    <div><label>Количество попыток</label><input name="attempts_allowed" type="number" min="{{ attempts_used|default:1 }}" value="{{ assignment.attempts_allowed }}" required></div>
+  </div>
+  {% if attempts_used %}<p class="muted">После начала тестирования порог заблокирован, а лимит нельзя установить ниже числа уже использованных попыток.</p>{% endif %}
+  <p><button>Сохранить изменения</button></p>
+</form>
+{% endblock %}

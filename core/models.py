@@ -164,7 +164,7 @@ class InternalDocument(models.Model):
     class Meta: ordering = ['title']
 
 class Assignment(models.Model):
-    STATUS = [('ASSIGNED', 'Назначено'), ('IN_PROGRESS', 'В процессе'), ('COMPLETED', 'Пройдено'), ('OVERDUE', 'Просрочено'), ('FAILED', 'Не пройдено'), ('REASSIGNED', 'Переназначено')]
+    STATUS = [('ASSIGNED', 'Назначено'), ('IN_PROGRESS', 'В процессе'), ('COMPLETED', 'Пройдено'), ('OVERDUE', 'Просрочено'), ('FAILED', 'Не пройдено'), ('REASSIGNED', 'Переназначено'), ('CANCELLED', 'Отменено')]
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='assignments')
     course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='assignments')
     test_version = models.ForeignKey(Test, null=True, blank=True, on_delete=models.PROTECT, related_name='assignments')
@@ -176,6 +176,8 @@ class Assignment(models.Model):
     assigned_at = models.DateTimeField('Назначено', auto_now_add=True)
     acknowledged_at = models.DateTimeField('Первый просмотр', null=True, blank=True)
     completed_at = models.DateTimeField('Успешно пройдено', null=True, blank=True)
+    cancelled_at = models.DateTimeField('Отменено', null=True, blank=True)
+    cancelled_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name='cancelled_assignments')
     is_demo = models.BooleanField('Демонстрационные данные', default=False)
     demo_key = models.CharField(max_length=120, null=True, blank=True, unique=True)
     class Meta:
@@ -185,7 +187,7 @@ class Assignment(models.Model):
         value = datetime.combine(self.due_date, self.due_time or time(23, 59, 59))
         return timezone.make_aware(value, timezone.get_current_timezone())
     @property
-    def is_overdue(self): return self.status not in ('COMPLETED', 'FAILED', 'REASSIGNED') and timezone.now() > self.deadline
+    def is_overdue(self): return self.status not in ('COMPLETED', 'FAILED', 'REASSIGNED', 'CANCELLED') and timezone.now() > self.deadline
     @property
     def attempts_left(self): return max(0, self.attempts_allowed - self.attempts.count())
 

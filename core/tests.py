@@ -363,3 +363,77 @@ class LearningPortalTests(TestCase):
             }).status_code,
             403,
         )
+
+    def test_active_assignment_can_be_edited_and_overdue_status_reopens(self):
+        self.assignment.status = 'OVERDUE'
+        self.assignment.due_date = timezone.localdate() - timedelta(days=1)
+        self.assignment.save(update_fields=['status', 'due_date'])
+        self.client.login(username='methodist', password='test-password')
+        edit_page = self.client.get(reverse('assignment_edit', args=[self.assignment.id]))
+        self.assertEqual(edit_page.status_code, 200)
+        self.assertContains(edit_page, 'Редактирование назначения')
+        new_due_date = timezone.localdate() + timedelta(days=30)
+        response = self.client.post(reverse('assignment_edit', args=[self.assignment.id]), {
+            'due_date': new_due_date.isoformat(), 'due_time': '21:30',
+            'passing_score': 90, 'attempts_allowed': 3,
+        }, follow=True)
+        self.assertContains(response, 'Назначение обновлено')
+        self.assignment.refresh_from_db()
+        self.assertEqual(self.assignment.due_date, new_due_date)
+        self.assertEqual(self.assignment.due_time.strftime('%H:%M'), '21:30')
+        self.assertEqual(self.assignment.passing_score, 90)
+        self.assertEqual(self.assignment.attempts_allowed, 3)
+        self.assertEqual(self.assignment.status, 'ASSIGNED')
+
+    def test_started_assignment_keeps_passing_score_when_edited(self):
+        TestAttempt.objects.create(
+            assignment=self.assignment, number=1, correct_answers=0,
+            score=40, passed=False,
+        )
+        self.assignment.status = 'IN_PROGRESS'
+        self.assignment.attempts_allowed = 3
+        self.assignment.save(update_fields=['status', 'attempts_allowed'])
+        self.client.login(username='methodist', password='test-password')
+        response = self.client.post(reverse('assignment_edit', args=[self.assignment.id]), {
+            'due_date': (timezone.localdate() + timedelta(days=10)).isoformat(),
+            'due_time': '23:00', 'passing_score': 90, 'attempts_allowed': 3,
+        }, follow=True)
+        self.assertContains(response, 'Порог нельзя изменить после начала тестирования')
+        self.assignment.refresh_from_db()
+        self.assertEqual(self.assignment.passing_score, 80)
+
+    def test_cancelling_assignment_preserves_history_and_blocks_test(self):
+        self.client.login(username='methodist', password='test-password')
+        response = self.client.post(
+            reverse('assignment_cancel', args=[self.assignment.id]), follow=True,
+        )
+        self.assertContains(response, 'Назначение отменено. История сохранена')
+        self.assignment.refresh_from_db()
+        self.assertEqual(self.assignment.status, 'CANCELLED')
+        self.assertIsNotNone(self.assignment.cancelled_at)
+        self.assertEqual(self.assignment.cancelled_by.username, 'methodist')
+        self.client.logout()
+        self.client.login(username='employee', password='test-password')
+        self.client.post(reverse('acknowledge', args=[self.assignment.id]))
+        self.assignment.refresh_from_db()
+        self.assertEqual(self.assignment.status, 'CANCELLED')
+        course_page = self.client.get(reverse('course', args=[self.course.id]))
+        self.assertContains(course_page, 'Тест открывается после назначения курса')
+        self.assertEqual(self.client.get(reverse('test', args=[self.course.id])).status_code, 403)
+
+    def test_completed_assignment_cannot_be_edited_or_cancelled(self):
+        self.assignment.status = 'COMPLETED'
+        self.assignment.completed_at = timezone.now()
+        self.assignment.save(update_fields=['status', 'completed_at'])
+        self.client.login(username='methodist', password='test-password')
+        edit = self.client.get(reverse('assignment_edit', args=[self.assignment.id]), follow=True)
+        self.assertContains(edit, 'Можно редактировать только активное назначение')
+        cancel = self.client.post(reverse('assignment_cancel', args=[self.assignment.id]), follow=True)
+        self.assertContains(cancel, 'Можно отменить только активное назначение')
+        self.assignment.refresh_from_db()
+        self.assertEqual(self.assignment.status, 'COMPLETED')
+
+    def test_employee_cannot_edit_or_cancel_assignment(self):
+        self.client.login(username='employee', password='test-password')
+        self.assertEqual(self.client.get(reverse('assignment_edit', args=[self.assignment.id])).status_code, 403)
+        self.assertEqual(self.client.post(reverse('assignment_cancel', args=[self.assignment.id])).status_code, 403)

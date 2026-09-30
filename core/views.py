@@ -26,6 +26,7 @@ from .models import (Assignment, AuditLog, Course, Department, EmployeeType,
 
 
 MAX_UPLOAD_SIZE = 15 * 1024 * 1024
+ACTIVE_ASSIGNMENT_STATUSES = ('ASSIGNED', 'IN_PROGRESS', 'OVERDUE')
 
 
 def profile(user): return Profile.objects.get_or_create(user=user)[0]
@@ -352,7 +353,10 @@ def course_detail(request, pk):
         pk=pk,
     )
     assignments = Assignment.objects.filter(course=course, user=request.user).prefetch_related('attempts')
-    assignment = assignments.filter(status__in=('ASSIGNED', 'IN_PROGRESS', 'OVERDUE')).first() or assignments.first()
+    assignment = (
+        assignments.filter(status__in=ACTIVE_ASSIGNMENT_STATUSES).first()
+        or assignments.exclude(status__in=('CANCELLED', 'REASSIGNED')).first()
+    )
     test = assignment.test_version if assignment and assignment.test_version_id else current_test(course, True)
     return render(request, 'core/course.html', {'course': course, 'assignment': assignment, 'test': test})
 
@@ -361,6 +365,9 @@ def course_detail(request, pk):
 def acknowledge(request, pk):
     assignment = get_object_or_404(Assignment, pk=pk, user=request.user)
     if request.method == 'POST':
+        if assignment.status not in ACTIVE_ASSIGNMENT_STATUSES:
+            messages.error(request, 'Назначение больше не активно.')
+            return redirect('course', pk=assignment.course_id)
         if assignment.is_overdue:
             if assignment.status != 'OVERDUE':
                 assignment.status = 'OVERDUE'; assignment.save(update_fields=['status'])
@@ -373,7 +380,10 @@ def acknowledge(request, pk):
 
 def test_assignment(course, user):
     assignments = Assignment.objects.filter(course=course, user=user)
-    return assignments.filter(status__in=('ASSIGNED', 'IN_PROGRESS', 'OVERDUE')).first() or assignments.first()
+    return (
+        assignments.filter(status__in=ACTIVE_ASSIGNMENT_STATUSES).first()
+        or assignments.exclude(status__in=('CANCELLED', 'REASSIGNED')).first()
+    )
 
 
 def test_timer_key(assignment):
@@ -614,10 +624,82 @@ def create_assignment(request):
     for user_id in user_ids:
         Assignment.objects.filter(
             user_id=user_id, course=course,
-            status__in=('ASSIGNED', 'IN_PROGRESS', 'OVERDUE'),
+            status__in=ACTIVE_ASSIGNMENT_STATUSES,
         ).update(status='REASSIGNED')
         Assignment.objects.create(user_id=user_id,course=course,**values)
     AuditLog.objects.create(user=request.user,action='Назначено обучение',object_label=course.title); return redirect('assignments')
+
+
+@login_required
+def assignment_edit(request, pk):
+    if not can_manage(request.user): return deny(request.user)
+    assignment = get_object_or_404(
+        Assignment.objects.select_related('user', 'course').prefetch_related('attempts'), pk=pk,
+    )
+    if assignment.status not in ACTIVE_ASSIGNMENT_STATUSES:
+        messages.error(request, 'Можно редактировать только активное назначение.')
+        return redirect('assignments')
+    attempts_used = assignment.attempts.count()
+    if request.method == 'POST':
+        try:
+            due_date = datetime.strptime(request.POST['due_date'], '%Y-%m-%d').date()
+            due_time = datetime.strptime(request.POST.get('due_time') or '23:59', '%H:%M').time()
+            passing_score = int(request.POST['passing_score'])
+            attempts_allowed = int(request.POST['attempts_allowed'])
+        except (KeyError, TypeError, ValueError):
+            messages.error(request, 'Проверьте дату, время, порог и количество попыток.')
+            return redirect('assignment_edit', pk=assignment.id)
+        if not 1 <= passing_score <= 100 or attempts_allowed < 1:
+            messages.error(request, 'Порог должен быть от 1 до 100%, а количество попыток — не меньше одной.')
+            return redirect('assignment_edit', pk=assignment.id)
+        if attempts_used and passing_score != assignment.passing_score:
+            messages.error(request, 'Порог нельзя изменить после начала тестирования: история оценок должна оставаться неизменной.')
+            return redirect('assignment_edit', pk=assignment.id)
+        if attempts_allowed < attempts_used:
+            messages.error(request, f'Нельзя установить меньше {attempts_used} попыток: они уже использованы.')
+            return redirect('assignment_edit', pk=assignment.id)
+        assignment.due_date = due_date
+        assignment.due_time = due_time
+        assignment.passing_score = passing_score
+        assignment.attempts_allowed = attempts_allowed
+        if attempts_used and attempts_used >= attempts_allowed:
+            assignment.status = 'FAILED'
+        elif timezone.now() > assignment.deadline:
+            assignment.status = 'OVERDUE'
+        else:
+            assignment.status = 'IN_PROGRESS' if assignment.acknowledged_at else 'ASSIGNED'
+        assignment.save(update_fields=[
+            'due_date', 'due_time', 'passing_score', 'attempts_allowed', 'status',
+        ])
+        AuditLog.objects.create(
+            user=request.user, action='Назначение изменено',
+            object_label=f'#{assignment.id} {assignment.user.username}: {assignment.course.title}',
+        )
+        messages.success(request, 'Назначение обновлено.')
+        return redirect('assignments')
+    return render(request, 'core/assignment_edit.html', {
+        'assignment': assignment, 'attempts_used': attempts_used,
+    })
+
+
+@login_required
+def assignment_cancel(request, pk):
+    if not can_manage(request.user): return deny(request.user)
+    assignment = get_object_or_404(Assignment.objects.select_related('user', 'course'), pk=pk)
+    if request.method != 'POST': return redirect('assignments')
+    if assignment.status not in ACTIVE_ASSIGNMENT_STATUSES:
+        messages.error(request, 'Можно отменить только активное назначение.')
+        return redirect('assignments')
+    assignment.status = 'CANCELLED'
+    assignment.cancelled_at = timezone.now()
+    assignment.cancelled_by = request.user
+    assignment.save(update_fields=['status', 'cancelled_at', 'cancelled_by'])
+    AuditLog.objects.create(
+        user=request.user, action='Назначение отменено',
+        object_label=f'#{assignment.id} {assignment.user.username}: {assignment.course.title}',
+    )
+    messages.success(request, 'Назначение отменено. История сохранена.')
+    return redirect('assignments')
 
 
 def report_rows(request):
