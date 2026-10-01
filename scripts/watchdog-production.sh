@@ -11,7 +11,12 @@ probe() {
 }
 
 probe_onco() {
-    [ "$(docker inspect --format '{{.State.Health.Status}}' deploy-backend-1 2>/dev/null)" = healthy ]
+    health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' deploy-backend-1 2>/dev/null || true)
+    if [ "$health" = none ]; then
+        probe /
+    else
+        [ "$health" = healthy ]
+    fi
 }
 
 check() {
