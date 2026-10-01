@@ -33,6 +33,7 @@
 py -m pip install -r requirements-ops.txt
 py scripts/offsite_backup.py encrypt <каталог-с-копией> <путь-к-recovery.key> <имя.oncoenc>
 py scripts/offsite_backup.py verify <имя.oncoenc> <путь-к-recovery.key>
+py scripts/offsite_backup.py restore <имя.oncoenc> <путь-к-recovery.key> <новый-пустой-каталог>
 ```
 
 В Google Drive отправляется **только** `.oncoenc`. Файл `recovery.key` нельзя

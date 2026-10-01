@@ -7,6 +7,7 @@ The encrypted file format is: magic (8), nonce (12), ciphertext, tag (16).
 import argparse
 import hashlib
 import os
+import shutil
 import tempfile
 import zipfile
 from pathlib import Path
@@ -97,7 +98,7 @@ def encrypt(source_dir, key_file, output_file):
     return output_file
 
 
-def verify(encrypted_file, key_file):
+def decrypt_to_zip(encrypted_file, key_file, packed):
     encrypted_file = Path(encrypted_file)
     key = read_key(key_file)
     length = encrypted_file.stat().st_size
@@ -112,19 +113,40 @@ def verify(encrypted_file, key_file):
         source.seek(len(header))
         decryptor = Cipher(algorithms.AES(key), modes.GCM(header[len(MAGIC):], tag)).decryptor()
         decryptor.authenticate_additional_data(MAGIC)
-        with tempfile.TemporaryDirectory() as work:
-            packed = Path(work) / 'backup.zip'
-            remaining = length - len(header) - TAG_SIZE
-            with packed.open('wb') as target:
-                while remaining:
-                    block = source.read(min(CHUNK, remaining))
-                    if not block:
-                        raise ValueError('Encrypted backup is truncated')
-                    target.write(decryptor.update(block))
-                    remaining -= len(block)
-                target.write(decryptor.finalize())
-            check_zip(packed)
+        remaining = length - len(header) - TAG_SIZE
+        with packed.open('wb') as target:
+            while remaining:
+                block = source.read(min(CHUNK, remaining))
+                if not block:
+                    raise ValueError('Encrypted backup is truncated')
+                target.write(decryptor.update(block))
+                remaining -= len(block)
+            target.write(decryptor.finalize())
+        check_zip(packed)
+
+
+def verify(encrypted_file, key_file):
+    with tempfile.TemporaryDirectory() as work:
+        decrypt_to_zip(encrypted_file, key_file, Path(work) / 'backup.zip')
     return True
+
+
+def restore(encrypted_file, key_file, output_dir):
+    output_dir = Path(output_dir)
+    if output_dir.exists():
+        raise FileExistsError(output_dir)
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=output_dir.parent) as work:
+        packed = Path(work) / 'backup.zip'
+        decrypt_to_zip(encrypted_file, key_file, packed)
+        staged = Path(work) / 'restored'
+        staged.mkdir()
+        with zipfile.ZipFile(packed) as archive:
+            for name in FILES:
+                with archive.open(name) as source, (staged / name).open('wb') as target:
+                    shutil.copyfileobj(source, target, CHUNK)
+        staged.rename(output_dir)
+    return output_dir
 
 
 def main():
@@ -137,12 +159,18 @@ def main():
     check = subcommands.add_parser('verify')
     check.add_argument('encrypted_file', type=Path)
     check.add_argument('key_file', type=Path)
+    extract = subcommands.add_parser('restore')
+    extract.add_argument('encrypted_file', type=Path)
+    extract.add_argument('key_file', type=Path)
+    extract.add_argument('output_dir', type=Path)
     args = parser.parse_args()
     if args.action == 'encrypt':
         print(encrypt(args.source_dir, args.key_file, args.output_file))
         verify(args.output_file, args.key_file)
-    else:
+    elif args.action == 'verify':
         verify(args.encrypted_file, args.key_file)
+    else:
+        print(restore(args.encrypted_file, args.key_file, args.output_dir))
     print('Backup decrypts and all checksums match')
 
 
