@@ -1,0 +1,18 @@
+# Overlay for the requests portal on the shared 4 GiB VPS.
+# Apply together with /opt/applicationsys/deploy/linux/docker-compose.requests.yml.
+services:
+  requests_app:
+    command: ["sh", "-c", "test -f /app/instance/app.db || python manage.py init-db; waitress-serve --listen=0.0.0.0:8000 --threads=8 --connection-limit=256 --channel-timeout=45 run_prod:app"]
+    mem_limit: 512m
+    pids_limit: 64
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/', timeout=5).close()"]
+      interval: 30s
+      timeout: 7s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

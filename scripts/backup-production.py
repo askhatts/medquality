@@ -31,7 +31,14 @@ EXCLUDED_NAMES = {'.git', '.venv', 'node_modules', '__pycache__'}
 def include(path):
     if any(part in EXCLUDED_NAMES for part in path.parts):
         return False
-    if path.as_posix() in {'opt/quality/data/db.sqlite3', 'opt/applicationsys/instance/app.db'}:
+    if path.as_posix() in {
+        'opt/quality/data/db.sqlite3',
+        'opt/quality/data/db.sqlite3-wal',
+        'opt/quality/data/db.sqlite3-shm',
+        'opt/applicationsys/instance/app.db',
+        'opt/applicationsys/instance/app.db-wal',
+        'opt/applicationsys/instance/app.db-shm',
+    }:
         return False
     return path.suffix not in {'.log', '.pyc'}
 
@@ -39,6 +46,8 @@ def include(path):
 def main():
     os.umask(0o077)
     BACKUP_ROOT.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if shutil.disk_usage(BACKUP_ROOT).free < 512 * 1024 * 1024:
+        raise RuntimeError('Less than 512 MiB free: backup would risk filling the VPS disk')
     stamp = datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')
     pending = BACKUP_ROOT / f'.pending-{stamp}'
     final = BACKUP_ROOT / f'daily-{stamp}'
@@ -52,6 +61,10 @@ def main():
                     origin.backup(target)
                     if target.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
                         raise RuntimeError(f'Integrity check failed for {name}')
+                    if target.execute('PRAGMA journal_mode=DELETE').fetchone()[0] != 'delete':
+                        raise RuntimeError(f'Could not checkpoint {name}')
+            if any((pending / f'{name}{suffix}').exists() for suffix in ('-wal', '-shm')):
+                raise RuntimeError(f'SQLite sidecar remained after backup: {name}')
         with tarfile.open(pending / 'services.tar.gz', 'w:gz') as archive:
             for root in ARCHIVE_ROOTS:
                 if not root.exists():

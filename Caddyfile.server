@@ -13,12 +13,18 @@
 	handle_path /applications* {
 		reverse_proxy requests_app:8000 {
 			header_up X-Forwarded-Prefix /applications
+			lb_try_duration 5s
 		}
 	}
 
 	# Портал тестирования и обучения сохраняет собственный префикс /quality/.
 	handle /quality* {
-		reverse_proxy quality_app:8000
+		request_body {
+			max_size 20MB
+		}
+		reverse_proxy quality_app:8000 {
+			lb_try_duration 5s
+		}
 	}
 
 	# Онко-ГИС и все его данные доступны только после входа.
@@ -28,12 +34,22 @@
 			{$BASIC_AUTH_USER} {$BASIC_AUTH_HASH}
 		}
 
-		reverse_proxy backend:8000
+		reverse_proxy backend:8000 {
+			lb_try_duration 5s
+		}
+	}
+
+	# Keep the public service directory available if the GIS backend restarts.
+	handle / {
+		root * /srv/onco-public
+		file_server
 	}
 
 	# Главная страница и другие будущие приложения доступны без Basic Auth.
 	handle {
-		reverse_proxy backend:8000
+		reverse_proxy backend:8000 {
+			lb_try_duration 5s
+		}
 	}
 
 	# Не индексировать поисковиками (дополнительно к паролю).

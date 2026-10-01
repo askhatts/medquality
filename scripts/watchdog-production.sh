@@ -10,12 +10,16 @@ probe() {
         "https://oncomap-abai.kz$1" --output /dev/null
 }
 
+probe_onco() {
+    [ "$(docker inspect --format '{{.State.Health.Status}}' deploy-backend-1 2>/dev/null)" = healthy ]
+}
+
 check() {
     name=$1
     url=$2
     container=$3
     state="$state_dir/$name"
-    if probe "$url"; then
+    if { [ "$name" = onco ] && probe_onco; } || { [ "$name" != onco ] && probe "$url"; }; then
         printf '0 0\n' > "$state"
         return 0
     fi

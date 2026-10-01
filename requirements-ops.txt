@@ -1,0 +1,3 @@
+# Only for the workstation that encrypts off-site backups.
+cryptography>=45,<47
+paramiko>=3,<5

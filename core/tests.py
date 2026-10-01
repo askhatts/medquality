@@ -4,6 +4,7 @@ from django.conf import settings
 from django.contrib.auth.models import User
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
+from django.db.models.deletion import ProtectedError
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
@@ -34,7 +35,9 @@ class LearningPortalTests(TestCase):
         self.assertEqual(latest.due_time.strftime('%H:%M'), '22:00')
         self.assertEqual(latest.attempts_allowed, 2)
     def test_successful_test_blocks_further_attempts(self):
-        self.client.login(username='employee', password='test-password'); response = self.client.post(reverse('test', args=[self.course.id]), {f'q{self.test.questions.first().id}':'0'})
+        self.client.login(username='employee', password='test-password')
+        self.client.post(reverse('test_start', args=[self.course.id]))
+        response = self.client.post(reverse('test', args=[self.course.id]), {f'q{self.test.questions.first().id}':'0'})
         self.assertContains(response, 'Тест пройден'); self.assignment.refresh_from_db(); self.assertEqual(self.assignment.status, 'COMPLETED'); self.assertRedirects(self.client.get(reverse('test', args=[self.course.id])), reverse('course', args=[self.course.id]))
 
     def test_test_requires_a_separate_start_screen(self):
@@ -53,12 +56,37 @@ class LearningPortalTests(TestCase):
         self.test.time_limit_minutes = 1
         self.test.save(update_fields=['time_limit_minutes'])
         self.client.login(username='employee', password='test-password')
-        session = self.client.session
-        session[f'test_started_at_{self.assignment.id}'] = (timezone.now() - timedelta(minutes=2)).isoformat()
-        session.save()
+        self.assignment.current_attempt_started_at = timezone.now() - timedelta(minutes=2)
+        self.assignment.save(update_fields=['current_attempt_started_at'])
         response = self.client.get(reverse('test', args=[self.course.id]))
         self.assertContains(response, 'Время истекло')
         self.assertEqual(self.assignment.attempts.count(), 1)
+
+    def test_test_timer_cannot_be_reset_or_bypassed(self):
+        self.test.time_limit_minutes = 10
+        self.test.save(update_fields=['time_limit_minutes'])
+        self.client.login(username='employee', password='test-password')
+        answer = {f'q{self.test.questions.first().id}': '0'}
+        self.client.post(reverse('test', args=[self.course.id]), answer)
+        self.assertFalse(self.assignment.attempts.exists())
+        self.client.post(reverse('test_start', args=[self.course.id]))
+        self.assignment.refresh_from_db()
+        started_at = self.assignment.current_attempt_started_at
+        self.assertIsNotNone(started_at)
+        self.client.post(reverse('test_start', args=[self.course.id]))
+        self.assignment.refresh_from_db()
+        self.assertEqual(self.assignment.current_attempt_started_at, started_at)
+        self.client.post(reverse('test', args=[self.course.id]), answer)
+        self.client.post(reverse('test', args=[self.course.id]), answer)
+        self.assertEqual(self.assignment.attempts.count(), 1)
+
+    def test_training_history_protects_users_and_courses_from_deletion(self):
+        with self.assertRaises(ProtectedError):
+            self.employee.delete()
+        with self.assertRaises(ProtectedError):
+            self.course.delete()
+        with self.assertRaises(ProtectedError):
+            self.course.direction.delete()
     def test_reassignment_preserves_completed_history(self):
         self.assignment.status = 'COMPLETED'; self.assignment.completed_at = timezone.now(); self.assignment.save()
         self.client.login(username='methodist', password='test-password')
@@ -119,6 +147,7 @@ class LearningPortalTests(TestCase):
         question = Question.objects.create(test=self.test, text='Выберите два', question_type='MULTIPLE', options=['A','B','C'], correct_indexes=[0,2], points=2, order=2)
         self.assignment.attempts_allowed = 2; self.assignment.save()
         self.client.login(username='employee', password='test-password')
+        self.client.post(reverse('test_start', args=[self.course.id]))
         response = self.client.post(reverse('test', args=[self.course.id]), {f'q{self.test.questions.first().id}':'0', f'q{question.id}':['0','2']})
         self.assertContains(response, '100%')
     def test_edit_after_attempt_creates_new_test_version(self):
@@ -241,7 +270,7 @@ class LearningPortalTests(TestCase):
         self.assertContains(response, 'Добро пожаловать, Иван Иванов!')
         self.assertContains(response, 'Логин: employee')
         self.assertEqual(settings.SESSION_COOKIE_AGE, 300)
-        self.assertTrue(settings.SESSION_SAVE_EVERY_REQUEST)
+        self.assertFalse(settings.SESSION_SAVE_EVERY_REQUEST)
         self.assertEqual(self.client.get(reverse('session_ping')).status_code, 204)
 
     def test_load_mcbp2_is_idempotent(self):

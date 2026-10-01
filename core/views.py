@@ -479,14 +479,8 @@ def test_timer_key(assignment):
 
 
 def test_started_at(request, assignment):
-    value = request.session.get(test_timer_key(assignment))
-    if not value:
-        return None
-    try:
-        started_at = datetime.fromisoformat(value)
-        return started_at if timezone.is_aware(started_at) else timezone.make_aware(started_at)
-    except (TypeError, ValueError):
-        return None
+    # The database, not the browser session, owns the attempt deadline.
+    return assignment.current_attempt_started_at
 
 
 def test_seconds_left(test, started_at):
@@ -496,13 +490,23 @@ def test_seconds_left(test, started_at):
 
 
 def record_timeout(request, assignment, test):
-    attempt = TestAttempt.objects.create(
-        assignment=assignment, number=assignment.attempts.count() + 1,
-        correct_answers=0, score=0, passed=False,
-        answers_snapshot=[{'timed_out': True}],
-    )
-    assignment.status = 'FAILED' if assignment.attempts_left == 0 else 'IN_PROGRESS'
-    assignment.save(update_fields=['status'])
+    started_at = assignment.current_attempt_started_at
+    if not started_at or test_seconds_left(test, started_at) != 0:
+        return None
+    with transaction.atomic():
+        claimed = Assignment.objects.filter(
+            pk=assignment.pk, current_attempt_started_at=started_at,
+        ).update(current_attempt_started_at=None)
+        if not claimed:
+            return None
+        assignment.refresh_from_db()
+        attempt = TestAttempt.objects.create(
+            assignment=assignment, number=assignment.attempts.count() + 1,
+            correct_answers=0, score=0, passed=False,
+            answers_snapshot=[{'timed_out': True}],
+        )
+        assignment.status = 'FAILED' if assignment.attempts_left == 0 else 'IN_PROGRESS'
+        assignment.save(update_fields=['status'])
     request.session.pop(test_timer_key(assignment), None)
     AuditLog.objects.create(user=request.user, action='Время теста истекло', object_label=test.title)
     return attempt
@@ -519,8 +523,15 @@ def start_test(request, pk):
     test = assignment.test_version or current_test(course, True)
     if not test:
         return HttpResponse('Итоговый тест ещё не опубликован.', status=409)
-    request.session[test_timer_key(assignment)] = timezone.now().isoformat()
-    request.session.modified = True
+    started_at = assignment.current_attempt_started_at
+    if started_at and test_seconds_left(test, started_at) == 0:
+        record_timeout(request, assignment, test)
+        return redirect('test', pk=pk)
+    if not started_at:
+        Assignment.objects.filter(
+            pk=assignment.pk, current_attempt_started_at__isnull=True,
+        ).update(current_attempt_started_at=timezone.now())
+    request.session.pop(test_timer_key(assignment), None)
     return redirect('test', pk=pk)
 
 
@@ -538,15 +549,13 @@ def take_test(request, pk):
     if not test: return HttpResponse('Итоговый тест ещё не опубликован.', status=409)
     if assignment.status == 'COMPLETED' or assignment.attempts_left == 0: return redirect('course', pk=pk)
     started_at = test_started_at(request, assignment)
-    if request.method == 'GET' and not started_at:
-        return render(request, 'core/test_start.html', {'test': test, 'assignment': assignment})
     if not started_at:
-        started_at = timezone.now()
-        request.session[test_timer_key(assignment)] = started_at.isoformat()
-        request.session.modified = True
+        return render(request, 'core/test_start.html', {'test': test, 'assignment': assignment})
     seconds_left = test_seconds_left(test, started_at)
     if seconds_left == 0:
         attempt = record_timeout(request, assignment, test)
+        if attempt is None:
+            return redirect('test', pk=pk)
         return render(request, 'core/test.html', {'test': test, 'assignment': assignment, 'result': attempt, 'timed_out': True})
     if request.method == 'POST':
         questions=list(test.questions.all()); total=sum(q.points for q in questions); earned=0; correct_count=0; snapshot=[]
@@ -558,11 +567,25 @@ def take_test(request, pk):
             if correct: earned += q.points; correct_count += 1
             snapshot.append({'question_id':q.id,'question':q.text,'type':q.question_type,'options':q.options,'selected':selected_indexes,'correct':expected,'is_correct':correct,'points':q.points if correct else 0,'max_points':q.points})
         score = round(100 * earned / total) if total else 0; passed = score >= assignment.passing_score
-        attempt=TestAttempt.objects.create(assignment=assignment, number=assignment.attempts.count()+1, correct_answers=correct_count, score=score, passed=passed, answers_snapshot=snapshot)
-        if passed: assignment.status='COMPLETED'; assignment.completed_at=timezone.now()
-        elif assignment.attempts_left == 0: assignment.status='FAILED'
-        else: assignment.status='IN_PROGRESS'
-        assignment.save(); AuditLog.objects.create(user=request.user, action='Пройден тест', object_label=f'{course.title}: {score}%')
+        if test_seconds_left(test, started_at) == 0:
+            attempt = record_timeout(request, assignment, test)
+            if attempt is None:
+                return redirect('test', pk=pk)
+            return render(request, 'core/test.html', {'test':test, 'assignment':assignment, 'result':attempt, 'timed_out':True})
+        with transaction.atomic():
+            claimed = Assignment.objects.filter(
+                pk=assignment.pk, current_attempt_started_at=started_at,
+                status__in=ACTIVE_ASSIGNMENT_STATUSES,
+            ).update(current_attempt_started_at=None)
+            if not claimed:
+                return redirect('test', pk=pk)
+            assignment.refresh_from_db()
+            attempt=TestAttempt.objects.create(assignment=assignment, number=assignment.attempts.count()+1, correct_answers=correct_count, score=score, passed=passed, answers_snapshot=snapshot)
+            if passed: assignment.status='COMPLETED'; assignment.completed_at=timezone.now()
+            elif assignment.attempts_left == 0: assignment.status='FAILED'
+            else: assignment.status='IN_PROGRESS'
+            assignment.save(update_fields=['status', 'completed_at'])
+            AuditLog.objects.create(user=request.user, action='Пройден тест', object_label=f'{course.title}: {score}%')
         request.session.pop(test_timer_key(assignment), None)
         return render(request, 'core/test.html', {'test':test,'assignment':assignment,'result':attempt})
     question_items = []

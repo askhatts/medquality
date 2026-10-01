@@ -19,7 +19,11 @@ ROOT_URLCONF = 'config.urls'
 TEMPLATES = [{'BACKEND':'django.template.backends.django.DjangoTemplates','DIRS':[BASE_DIR/'core/templates'],'APP_DIRS':True,'OPTIONS':{'context_processors':['django.template.context_processors.request','django.contrib.auth.context_processors.auth','django.contrib.messages.context_processors.messages','core.context_processors.portal']}}]
 WSGI_APPLICATION = 'config.wsgi.application'
 if os.getenv('USE_SQLITE', '0') == '1':
-    DATABASES = {'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': os.getenv('SQLITE_PATH', BASE_DIR / 'db.sqlite3')}}
+    DATABASES = {'default': {
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': os.getenv('SQLITE_PATH', BASE_DIR / 'db.sqlite3'),
+        'OPTIONS': {'timeout': 30, 'transaction_mode': 'IMMEDIATE'},
+    }}
 else:
     DATABASES = {'default': {'ENGINE':'django.db.backends.postgresql','NAME':os.getenv('POSTGRES_DB','accreditation'),'USER':os.getenv('POSTGRES_USER','accreditation'),'PASSWORD':os.getenv('POSTGRES_PASSWORD','accreditation'),'HOST':os.getenv('POSTGRES_HOST','db'),'PORT':os.getenv('POSTGRES_PORT','5432')}}
 AUTH_PASSWORD_VALIDATORS = [{'NAME':'django.contrib.auth.password_validation.MinimumLengthValidator'}]
@@ -33,7 +37,9 @@ SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SECURE = not DEBUG
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_AGE = 300
-SESSION_SAVE_EVERY_REQUEST = True
+# The authenticated UI sends an activity ping at most once per minute. Saving
+# every GET response creates needless SQLite writes under concurrent usage.
+SESSION_SAVE_EVERY_REQUEST = False
 SESSION_EXPIRE_AT_BROWSER_CLOSE = True
 SECURE_CONTENT_TYPE_NOSNIFF = True
 X_FRAME_OPTIONS = 'SAMEORIGIN'

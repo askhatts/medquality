@@ -80,7 +80,7 @@ class QualityRequirement(models.Model):
 
 class Course(models.Model):
     legacy_passing_score = models.PositiveSmallIntegerField(db_column='passing_score', default=80, editable=False)
-    direction = models.ForeignKey(QualityDirection, verbose_name='Направление качества', on_delete=models.CASCADE, related_name='courses')
+    direction = models.ForeignKey(QualityDirection, verbose_name='Направление качества', on_delete=models.PROTECT, related_name='courses')
     title = models.CharField('Название курса', max_length=255)
     description = models.TextField('Описание', blank=True)
     active = models.BooleanField('Активен', default=True)
@@ -165,8 +165,8 @@ class InternalDocument(models.Model):
 
 class Assignment(models.Model):
     STATUS = [('ASSIGNED', 'Назначено'), ('IN_PROGRESS', 'В процессе'), ('COMPLETED', 'Пройдено'), ('OVERDUE', 'Просрочено'), ('FAILED', 'Не пройдено'), ('REASSIGNED', 'Переназначено'), ('CANCELLED', 'Отменено')]
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='assignments')
-    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name='assignments')
+    user = models.ForeignKey(User, on_delete=models.PROTECT, related_name='assignments')
+    course = models.ForeignKey(Course, on_delete=models.PROTECT, related_name='assignments')
     test_version = models.ForeignKey(Test, null=True, blank=True, on_delete=models.PROTECT, related_name='assignments')
     due_date = models.DateField('Срок прохождения')
     due_time = models.TimeField('Время окончания', null=True, blank=True)
@@ -176,6 +176,7 @@ class Assignment(models.Model):
     assigned_at = models.DateTimeField('Назначено', auto_now_add=True)
     acknowledged_at = models.DateTimeField('Первый просмотр', null=True, blank=True)
     completed_at = models.DateTimeField('Успешно пройдено', null=True, blank=True)
+    current_attempt_started_at = models.DateTimeField(null=True, blank=True)
     cancelled_at = models.DateTimeField('Отменено', null=True, blank=True)
     cancelled_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name='cancelled_assignments')
     is_demo = models.BooleanField('Демонстрационные данные', default=False)
@@ -192,7 +193,7 @@ class Assignment(models.Model):
     def attempts_left(self): return max(0, self.attempts_allowed - self.attempts.count())
 
 class TestAttempt(models.Model):
-    assignment = models.ForeignKey(Assignment, on_delete=models.CASCADE, related_name='attempts')
+    assignment = models.ForeignKey(Assignment, on_delete=models.PROTECT, related_name='attempts')
     number = models.PositiveSmallIntegerField('Номер попытки')
     correct_answers = models.PositiveSmallIntegerField('Верных ответов', default=0)
     score = models.PositiveSmallIntegerField('Оценка, %')
