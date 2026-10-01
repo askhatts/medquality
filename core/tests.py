@@ -11,6 +11,10 @@ from openpyxl import load_workbook
 from .models import Assignment, Course, Department, EmployeeType, InternalDocument, Lesson, PasswordResetRequest, Profile, QualityDirection, Question, Test, TestAttempt
 
 class LearningPortalTests(TestCase):
+    def test_health_reports_database_availability(self):
+        response = self.client.get(reverse('health'))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, b'ok')
     def setUp(self):
         dep = Department.objects.create(name='Тестовое отделение'); kind = EmployeeType.objects.create(name='Медицинский')
         self.employee = User.objects.create_user('employee', password='test-password'); Profile.objects.create(user=self.employee, role='EMPLOYEE', department=dep, employee_type=kind, position='Врач')

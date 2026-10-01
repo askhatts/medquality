@@ -11,7 +11,7 @@ from django.contrib.auth.forms import PasswordChangeForm
 from django.contrib.auth.models import User
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
-from django.db import transaction
+from django.db import connection, transaction
 from django.db.models import Prefetch
 from django.http import FileResponse, Http404, HttpResponse, HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
@@ -27,6 +27,17 @@ from .models import (Assignment, AuditLog, Course, Department, EmployeeType,
 
 MAX_UPLOAD_SIZE = 15 * 1024 * 1024
 ACTIVE_ASSIGNMENT_STATUSES = ('ASSIGNED', 'IN_PROGRESS', 'OVERDUE')
+
+
+def health(request):
+    """Small probe for the reverse proxy and container health check."""
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute('SELECT 1')
+            cursor.fetchone()
+    except Exception:
+        return HttpResponse('unavailable', status=503, content_type='text/plain')
+    return HttpResponse('ok', content_type='text/plain')
 
 
 def profile(user): return Profile.objects.get_or_create(user=user)[0]

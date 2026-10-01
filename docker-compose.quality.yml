@@ -17,6 +17,17 @@ services:
     networks:
       - onco
     mem_limit: 320m
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; request=urllib.request.Request('http://127.0.0.1:8000/quality/health/', headers={'Host':'oncomap-abai.kz'}); urllib.request.urlopen(request, timeout=4).close()"]
+      interval: 30s
+      timeout: 6s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 networks:
   onco:

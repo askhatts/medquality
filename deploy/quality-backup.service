@@ -1,0 +1,6 @@
+[Unit]
+Description=Back up quality, Onco-GIS and requests data
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/flock -n /run/quality-backup.lock /usr/bin/python3 /opt/quality/scripts/backup-production.py

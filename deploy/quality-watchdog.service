@@ -1,0 +1,8 @@
+[Unit]
+Description=Check and recover failed co-hosted web containers
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/flock -n /run/quality-watchdog.lock /bin/sh /opt/quality/scripts/watchdog-production.sh
