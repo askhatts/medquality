@@ -11,12 +11,12 @@ services:
       USE_SQLITE: "1"
       SQLITE_PATH: "/data/db.sqlite3"
       MEDIA_ROOT: "/data/media"
-    command: sh -c "python manage.py migrate --noinput && python manage.py collectstatic --noinput && gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 2 --timeout 60"
+    command: sh -c "python manage.py migrate --noinput && python manage.py collectstatic --noinput && gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 3 --timeout 60"
     volumes:
       - ./data:/data
     networks:
       - onco
-    mem_limit: 320m
+    mem_limit: 1g
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; request=urllib.request.Request('http://127.0.0.1:8000/quality/health/', headers={'Host':'oncomap-abai.kz'}); urllib.request.urlopen(request, timeout=4).close()"]
       interval: 30s
