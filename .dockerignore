@@ -5,3 +5,6 @@ __pycache__
 media
 staticfiles
 backups
+data
+.tmp
+.venv

@@ -97,7 +97,7 @@ class Migration(migrations.Migration):
             name='QualityRequirement',
             fields=[
                 ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('number', models.CharField(max_length=30, verbose_name='Номер требования')),
+                ('number', models.CharField(max_length=80, verbose_name='Номер требования')),
                 ('title', models.CharField(max_length=255, verbose_name='Название')),
                 ('owner', models.CharField(blank=True, max_length=255, verbose_name='Владелец процесса')),
                 ('curator', models.CharField(blank=True, max_length=255, verbose_name='Куратор')),

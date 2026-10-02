@@ -67,7 +67,7 @@ class QualityDirection(models.Model):
 
 class QualityRequirement(models.Model):
     direction = models.ForeignKey(QualityDirection, on_delete=models.CASCADE, related_name='requirements')
-    number = models.CharField('Номер требования', max_length=30)
+    number = models.CharField('Номер требования', max_length=80)
     title = models.CharField('Название', max_length=255)
     owner = models.CharField('Владелец процесса', max_length=255, blank=True)
     curator = models.CharField('Куратор', max_length=255, blank=True)

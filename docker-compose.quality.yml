@@ -1,15 +1,49 @@
 services:
+  db:
+    image: postgres:16-alpine
+    container_name: quality_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: "${POSTGRES_DB:-quality}"
+      POSTGRES_USER: "${POSTGRES_USER:-quality}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}"
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    networks:
+      - onco
+    mem_limit: 512m
+    pids_limit: 128
+    shm_size: 64m
+    command: ["postgres", "-c", "max_connections=80", "-c", "shared_buffers=128MB"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
   quality:
     build: .
     container_name: quality_app
     restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
     environment:
       DJANGO_DEBUG: "0"
       DJANGO_SECRET_KEY: "${DJANGO_SECRET_KEY}"
       DJANGO_ALLOWED_HOSTS: "oncomap-abai.kz,www.oncomap-abai.kz"
       DJANGO_CSRF_TRUSTED_ORIGINS: "https://oncomap-abai.kz,https://www.oncomap-abai.kz"
-      USE_SQLITE: "1"
-      SQLITE_PATH: "/data/db.sqlite3"
+      USE_SQLITE: "0"
+      POSTGRES_DB: "${POSTGRES_DB:-quality}"
+      POSTGRES_USER: "${POSTGRES_USER:-quality}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}"
+      POSTGRES_HOST: "quality_db"
+      POSTGRES_PORT: "5432"
       MEDIA_ROOT: "/data/media"
     command: sh -c "python manage.py migrate --noinput && python manage.py collectstatic --noinput && gunicorn config.wsgi:application --bind 0.0.0.0:8000 --worker-class gthread --workers 2 --threads 8 --timeout 60 --max-requests 1000 --max-requests-jitter 100"
     volumes:

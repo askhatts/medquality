@@ -7,9 +7,11 @@ The encrypted file format is: magic (8), nonce (12), ciphertext, tag (16).
 import argparse
 import hashlib
 import os
+import secrets
 import shutil
 import tempfile
 import zipfile
+from contextlib import contextmanager
 from pathlib import Path
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -19,7 +21,34 @@ MAGIC = b'ONCOBKP1'
 NONCE_SIZE = 12
 TAG_SIZE = 16
 CHUNK = 1024 * 1024
-FILES = ('quality.sqlite3', 'requests.sqlite3', 'services.tar.gz', 'SHA256SUMS')
+QUALITY_BACKUPS = ('quality.sqlite3', 'quality.pgcustom')
+OTHER_FILES = ('requests.sqlite3', 'services.tar.gz', 'SHA256SUMS')
+
+
+@contextmanager
+def temporary_directory(parent=None):
+    location = parent or os.environ.get('ONCO_BACKUP_TEMP_DIR') or tempfile.gettempdir()
+    location = Path(location).resolve()
+    if not location.is_dir():
+        raise NotADirectoryError(location)
+    work = location / ('.onco-backup-' + secrets.token_hex(12))
+    work.mkdir()
+    if os.name != 'nt':
+        work.chmod(0o700)
+    try:
+        yield work
+    finally:
+        if work.resolve().parent != location:
+            raise RuntimeError('Refusing to remove a temporary folder outside its parent')
+        shutil.rmtree(work)
+
+
+def expected_files(names):
+    names = set(names)
+    selected = names.intersection(QUALITY_BACKUPS)
+    if len(selected) != 1 or names != selected.union(OTHER_FILES):
+        raise ValueError('Backup contains unexpected or missing files')
+    return names
 
 
 def read_key(path):
@@ -45,14 +74,15 @@ def ensure_key(path):
 
 def check_zip(path):
     with zipfile.ZipFile(path) as archive:
-        if set(archive.namelist()) != set(FILES):
-            raise ValueError('Backup contains unexpected or missing files')
+        names = expected_files(archive.namelist())
         manifest = archive.read('SHA256SUMS').decode('ascii')
         expected = {}
         for line in manifest.splitlines():
             digest, _, name = line.partition('  ')
             expected[name] = digest
-        for name in FILES[:-1]:
+        if set(expected) != names - {'SHA256SUMS'}:
+            raise ValueError('Backup checksum manifest does not match contents')
+        for name in names - {'SHA256SUMS'}:
             digest = hashlib.sha256()
             with archive.open(name) as source:
                 for block in iter(lambda: source.read(CHUNK), b''):
@@ -69,13 +99,14 @@ def encrypt(source_dir, key_file, output_file):
     if output_file.exists():
         raise FileExistsError(output_file)
     key = ensure_key(key_file)
-    for name in FILES:
+    files = expected_files(path.name for path in source_dir.iterdir() if path.is_file())
+    for name in files:
         if not (source_dir / name).is_file():
             raise FileNotFoundError(source_dir / name)
-    with tempfile.TemporaryDirectory() as work:
+    with temporary_directory() as work:
         packed = Path(work) / 'backup.zip'
         with zipfile.ZipFile(packed, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
-            for name in FILES:
+            for name in sorted(files):
                 archive.write(source_dir / name, arcname=name)
         check_zip(packed)
         nonce = os.urandom(NONCE_SIZE)
@@ -126,7 +157,7 @@ def decrypt_to_zip(encrypted_file, key_file, packed):
 
 
 def verify(encrypted_file, key_file):
-    with tempfile.TemporaryDirectory() as work:
+    with temporary_directory() as work:
         decrypt_to_zip(encrypted_file, key_file, Path(work) / 'backup.zip')
     return True
 
@@ -136,13 +167,13 @@ def restore(encrypted_file, key_file, output_dir):
     if output_dir.exists():
         raise FileExistsError(output_dir)
     output_dir.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(dir=output_dir.parent) as work:
+    with temporary_directory(output_dir.parent) as work:
         packed = Path(work) / 'backup.zip'
         decrypt_to_zip(encrypted_file, key_file, packed)
         staged = Path(work) / 'restored'
         staged.mkdir()
         with zipfile.ZipFile(packed) as archive:
-            for name in FILES:
+            for name in expected_files(archive.namelist()):
                 with archive.open(name) as source, (staged / name).open('wb') as target:
                     shutil.copyfileobj(source, target, CHUNK)
         staged.rename(output_dir)

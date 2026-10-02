@@ -1,3 +1,3 @@
-# Only for the workstation that encrypts off-site backups.
+# Workstation tools; the VPS uses its distro-provided python3-cryptography.
 cryptography>=45,<47
 paramiko>=3,<5
