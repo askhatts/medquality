@@ -1,0 +1,10 @@
+{
+    auto_https off
+    admin off
+}
+
+:8000 {
+    reverse_proxy quality_loadtest:8000 {
+        lb_try_duration 5s
+    }
+}

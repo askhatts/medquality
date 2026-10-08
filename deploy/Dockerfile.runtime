@@ -1,0 +1,6 @@
+# Build an application-only update from the already tested runtime image.
+# This avoids silently changing Django/base-image dependencies during rollout.
+ARG RUNTIME_IMAGE
+FROM ${RUNTIME_IMAGE}
+WORKDIR /app
+COPY . .

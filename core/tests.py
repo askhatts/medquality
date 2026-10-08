@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import date, timedelta
 from io import BytesIO
 from django.conf import settings
 from django.contrib.auth.models import User
@@ -291,6 +291,36 @@ class LearningPortalTests(TestCase):
         self.assertEqual(
             list(test.questions.values_list('correct_index', flat=True)),
             [1, 1, 1, 0, 2, 1, 1, 2, 1, 1],
+        )
+
+    def test_load_mcbp346_is_idempotent_and_preserves_history(self):
+        call_command('load_mcbp346', with_history=True)
+        call_command('load_mcbp346', with_history=True)
+        courses = Course.objects.filter(title__startswith='МЦБП ').exclude(
+            title='Тестовый курс'
+        ).order_by('title')
+        self.assertEqual(courses.count(), 3)
+        self.assertEqual(
+            [course.lessons.count() for course in courses],
+            [4, 5, 3],
+        )
+        self.assertEqual(
+            [course.tests.get(is_current=True).questions.count() for course in courses],
+            [10, 10, 9],
+        )
+        # employee and methodist are staff; sysadmin is deliberately excluded.
+        history = Assignment.objects.filter(demo_key__contains='-history-202603:')
+        self.assertEqual(history.count(), 6)
+        self.assertEqual(TestAttempt.objects.filter(assignment__in=history).count(), 6)
+        self.assertEqual(set(history.values_list('attempts__score', flat=True)), {80, 90, 100})
+        self.assertFalse(history.filter(user=self.admin).exists())
+        self.assertEqual(
+            set(history.values_list('completed_at__date', flat=True)),
+            {
+                date(2026, 3, 2),
+                date(2026, 3, 3),
+                date(2026, 3, 4),
+            },
         )
 
     def test_category_and_department_assignment_uses_intersection(self):

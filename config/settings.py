@@ -25,7 +25,18 @@ if os.getenv('USE_SQLITE', '0') == '1':
         'OPTIONS': {'timeout': 30, 'transaction_mode': 'IMMEDIATE'},
     }}
 else:
-    DATABASES = {'default': {'ENGINE':'django.db.backends.postgresql','NAME':os.getenv('POSTGRES_DB','accreditation'),'USER':os.getenv('POSTGRES_USER','accreditation'),'PASSWORD':os.getenv('POSTGRES_PASSWORD','accreditation'),'HOST':os.getenv('POSTGRES_HOST','db'),'PORT':os.getenv('POSTGRES_PORT','5432')}}
+    DATABASES = {'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': os.getenv('POSTGRES_DB', 'accreditation'),
+        'USER': os.getenv('POSTGRES_USER', 'accreditation'),
+        'PASSWORD': os.getenv('POSTGRES_PASSWORD', 'accreditation'),
+        'HOST': os.getenv('POSTGRES_HOST', 'db'),
+        'PORT': os.getenv('POSTGRES_PORT', '5432'),
+        # With gthread, reuse at most one connection per worker thread. Opening
+        # a new PostgreSQL process for every activity ping wastes shared CPU.
+        'CONN_MAX_AGE': int(os.getenv('POSTGRES_CONN_MAX_AGE', '60')),
+        'CONN_HEALTH_CHECKS': True,
+    }}
 AUTH_PASSWORD_VALIDATORS = [{'NAME':'django.contrib.auth.password_validation.MinimumLengthValidator'}]
 LANGUAGE_CODE, TIME_ZONE, USE_I18N, USE_TZ = 'ru', 'Asia/Qyzylorda', True, True
 STATIC_URL, STATIC_ROOT = '/quality/static/', BASE_DIR/'staticfiles'
