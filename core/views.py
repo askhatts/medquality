@@ -79,7 +79,7 @@ def login_view(request):
         user = authenticate(request, username=request.POST.get('username'), password=request.POST.get('password'))
         if user and user.is_active:
             login(request, user)
-            request.session.set_expiry(300)
+            request.session.set_expiry(settings.SESSION_COOKIE_AGE)
             display_name = user.get_full_name().strip() or user.username
             messages.success(request, f'Добро пожаловать, {display_name}! Ваш логин: {user.username}.')
             AuditLog.objects.create(user=user, action='Вход в систему')
@@ -106,6 +106,8 @@ def logout_view(request): logout(request); return redirect('login')
 
 @login_required
 def session_ping(request):
+    # Refresh older sessions that were created before the idle timeout changed.
+    request.session.set_expiry(settings.SESSION_COOKIE_AGE)
     request.session.modified = True
     return HttpResponse(status=204)
 

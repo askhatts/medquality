@@ -260,7 +260,7 @@ class LearningPortalTests(TestCase):
         self.assertContains(response, 'value="0"')
         self.assertContains(response, 'value="1"')
 
-    def test_login_shows_welcome_identity_and_five_minute_session(self):
+    def test_login_shows_welcome_identity_and_thirty_minute_session(self):
         self.employee.first_name = 'Иван'
         self.employee.last_name = 'Иванов'
         self.employee.save(update_fields=['first_name', 'last_name'])
@@ -269,9 +269,11 @@ class LearningPortalTests(TestCase):
         }, follow=True)
         self.assertContains(response, 'Добро пожаловать, Иван Иванов!')
         self.assertContains(response, 'Логин: employee')
-        self.assertEqual(settings.SESSION_COOKIE_AGE, 300)
+        self.assertEqual(settings.SESSION_COOKIE_AGE, 1800)
+        self.assertContains(response, 'const limit=1800000')
         self.assertFalse(settings.SESSION_SAVE_EVERY_REQUEST)
         self.assertEqual(self.client.get(reverse('session_ping')).status_code, 204)
+        self.assertGreaterEqual(self.client.session.get_expiry_age(), 1799)
 
     def test_load_mcbp2_is_idempotent(self):
         call_command('load_mcbp2')

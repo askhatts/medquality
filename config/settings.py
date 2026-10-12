@@ -47,7 +47,7 @@ SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO','https')
 SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SECURE = not DEBUG
 SESSION_COOKIE_HTTPONLY = True
-SESSION_COOKIE_AGE = 300
+SESSION_COOKIE_AGE = 1800
 # The authenticated UI sends an activity ping at most once per minute. Saving
 # every GET response creates needless SQLite writes under concurrent usage.
 SESSION_SAVE_EVERY_REQUEST = False
