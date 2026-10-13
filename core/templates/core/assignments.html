@@ -19,19 +19,24 @@
 </form>
 <form class="card" method="post" action="{% url 'assignment_bulk' %}" id="bulk-assignment-form">{% csrf_token %}
   <h2>Массовое изменение и отмена</h2>
-  <p class="muted">Операция применяется только к активным назначениям выбранного курса. Категория и отделение вместе работают как пересечение.</p>
+  <p class="muted">Можно выбрать несколько курсов. Завершённые назначения никогда не изменяются. Категория и подразделение вместе работают как пересечение.</p>
   <div class="form-grid">
-    <div><label>Курс</label><select name="course" required><option value="">Выберите курс</option>{% for c in courses %}<option value="{{ c.id }}">{{ c.direction }} — {{ c.title }}</option>{% endfor %}</select></div>
+    <div><label>Курсы</label><div class="checkboxes">{% for c in courses %}<label><input type="checkbox" name="courses" value="{{ c.id }}" style="width:auto"> {{ c.direction }} — {{ c.title }}</label>{% endfor %}</div></div>
     <div><label>Дата окончания</label><input name="due_date" type="date"></div>
     <div><label>Время окончания</label><input name="due_time" type="time" value="23:59"></div>
-    <div><label>Порог прохождения, %</label><input name="passing_score" type="number" min="1" max="100" value="80"></div>
-    <div><label>Количество попыток</label><input name="attempts_allowed" type="number" min="1" value="3"></div>
+    <div><label>Новый порог, %</label><input name="passing_score" type="number" min="1" max="100" placeholder="Не изменять"><small class="muted">После первой попытки порог изменить нельзя.</small></div>
+    <div><label>Новое общее число попыток</label><input name="attempts_allowed" type="number" min="1" placeholder="Не изменять"></div>
+    <div><label>Добавить попыток</label><input name="additional_attempts" type="number" min="0" value="0"><small class="muted">Используйте это поле для сотрудников, исчерпавших попытки.</small></div>
+  </div>
+  <div class="card" style="padding:12px">
+    <label><input type="checkbox" name="only_incomplete" style="width:auto" checked> Только не прошедшие, включая просроченные и исчерпавшие попытки</label>
+    <label><input type="checkbox" name="all_audience" style="width:auto"> Все сотрудники с незавершёнными назначениями выбранных курсов</label>
   </div>
   <div class="grid">
     <div><label>Категории сотрудников</label><div class="checkboxes">{% for t in types %}<label><input type="checkbox" name="employee_types" value="{{ t.id }}" style="width:auto"> {{ t.name }}</label>{% endfor %}</div></div>
     <div><label>Отделы / отделения</label><div class="checkboxes">{% for d in departments %}<label><input type="checkbox" name="departments" value="{{ d.id }}" style="width:auto"> {{ d.name }}</label>{% endfor %}</div></div>
   </div>
-  <p class="actions"><button name="action" value="edit">Изменить все выбранные назначения</button><button class="btn danger" name="action" value="cancel" formnovalidate onclick="return confirm('Отменить все активные назначения выбранного курса для этой аудитории? Записи останутся в журнале назначений и исчезнут из отчёта.');">Отменить все выбранные назначения</button></p>
+  <p class="actions"><button name="action" value="edit">Изменить выбранные назначения</button><button class="btn danger" name="action" value="cancel" formnovalidate onclick="return confirm('Отменить незавершённые назначения выбранных курсов для этой аудитории? Записи останутся в журнале назначений и исчезнут из отчёта.');">Отменить выбранные назначения</button></p>
 </form>
 <div class="card" style="overflow-x:auto"><h2>Журнал назначений</h2><table>
   <tr><th>№</th><th>Сотрудник</th><th>Курс</th><th>Срок</th><th>Порог / попытки</th><th>Статус</th><th>Действия</th></tr>

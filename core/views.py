@@ -12,7 +12,7 @@ from django.contrib.auth.models import User
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.db import connection, transaction
-from django.db.models import Prefetch
+from django.db.models import Count, Prefetch
 from django.http import FileResponse, Http404, HttpResponse, HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
@@ -637,6 +637,91 @@ def employees(request):
 
 
 @login_required
+def departments(request):
+    if not can_manage_people(request.user): return deny(request.user)
+    items = Department.objects.annotate(
+        staff_count=Count('profile', distinct=True),
+        document_count=Count('internal_documents', distinct=True),
+    ).order_by('name')
+    return render(request, 'core/departments.html', {'departments': items})
+
+
+@login_required
+def department_create(request):
+    if not can_manage_people(request.user): return deny(request.user)
+    if request.method != 'POST': return redirect('departments')
+    name = request.POST.get('name', '').strip()
+    if not name:
+        messages.error(request, 'Введите название подразделения.')
+    elif len(name) > Department._meta.get_field('name').max_length:
+        messages.error(request, 'Название подразделения слишком длинное.')
+    elif Department.objects.filter(name__iexact=name).exists():
+        messages.error(request, 'Подразделение с таким названием уже существует.')
+    else:
+        department = Department.objects.create(name=name)
+        AuditLog.objects.create(
+            user=request.user, action='Создано подразделение', object_label=department.name,
+        )
+        messages.success(request, 'Подразделение создано.')
+    return redirect('departments')
+
+
+@login_required
+def department_edit(request, pk):
+    if not can_manage_people(request.user): return deny(request.user)
+    department = get_object_or_404(Department, pk=pk)
+    if request.method != 'POST': return redirect('departments')
+    name = request.POST.get('name', '').strip()
+    if not name:
+        messages.error(request, 'Введите название подразделения.')
+    elif len(name) > Department._meta.get_field('name').max_length:
+        messages.error(request, 'Название подразделения слишком длинное.')
+    elif Department.objects.filter(name__iexact=name).exclude(pk=department.pk).exists():
+        messages.error(request, 'Такое подразделение уже существует. Используйте объединение.')
+    else:
+        old_name = department.name
+        department.name = name
+        department.save(update_fields=['name'])
+        AuditLog.objects.create(
+            user=request.user, action='Переименовано подразделение',
+            object_label=f'{old_name} → {name}',
+        )
+        messages.success(request, 'Название подразделения обновлено.')
+    return redirect('departments')
+
+
+@login_required
+def department_merge(request, pk):
+    if not can_manage_people(request.user): return deny(request.user)
+    if request.method != 'POST': return redirect('departments')
+    source = get_object_or_404(Department, pk=pk)
+    target = get_object_or_404(Department, pk=request.POST.get('target'))
+    if source.pk == target.pk:
+        messages.error(request, 'Нельзя объединить подразделение с самим собой.')
+        return redirect('departments')
+    with transaction.atomic():
+        source = Department.objects.select_for_update().get(pk=source.pk)
+        target = Department.objects.select_for_update().get(pk=target.pk)
+        staff_count = Profile.objects.filter(department=source).update(department=target)
+        document_count = InternalDocument.objects.filter(department=source).update(department=target)
+        if not target.head_id and source.head_id:
+            target.head_id = source.head_id
+            target.save(update_fields=['head'])
+        source_name = source.name
+        target_name = target.name
+        source.delete()
+        AuditLog.objects.create(
+            user=request.user, action='Объединены подразделения',
+            object_label=f'{source_name} → {target_name}; сотрудников: {staff_count}',
+        )
+    messages.success(
+        request,
+        f'Подразделения объединены. Перенесено сотрудников: {staff_count}, документов: {document_count}.',
+    )
+    return redirect('departments')
+
+
+@login_required
 def employee_form(request, pk=None):
     if not can_manage_people(request.user): return deny(request.user)
     target = get_object_or_404(Profile, pk=pk) if pk else None
@@ -713,7 +798,14 @@ def dismiss_password_request(request, pk):
 @login_required
 def assignment_list(request):
     if not can_manage(request.user): return deny(request.user)
-    return render(request,'core/assignments.html',{'assignments':visible_assignments(request.user),'courses':Course.objects.filter(active=True),'departments':Department.objects.all(),'types':EmployeeType.objects.all(),'employees':Profile.objects.select_related('user','department','employee_type').filter(user__is_active=True),'selected_course':request.GET.get('course','')})
+    return render(request,'core/assignments.html',{
+        'assignments': visible_assignments(request.user),
+        'courses': Course.objects.filter(active=True).select_related('direction').order_by('direction__title', 'title'),
+        'departments': Department.objects.order_by('name'),
+        'types': EmployeeType.objects.order_by('name'),
+        'employees': Profile.objects.select_related('user','department','employee_type').filter(user__is_active=True).order_by('user__last_name', 'user__first_name'),
+        'selected_course': request.GET.get('course',''),
+    })
 
 
 @login_required
@@ -747,29 +839,49 @@ def create_assignment(request):
 def assignment_bulk_action(request):
     if not can_manage(request.user): return deny(request.user)
     if request.method != 'POST': return redirect('assignments')
+    course_ids = request.POST.getlist('courses')
+    if not course_ids and request.POST.get('course'):
+        course_ids = [request.POST['course']]
     try:
-        course = Course.objects.get(pk=request.POST['course'])
-    except (Course.DoesNotExist, KeyError, TypeError, ValueError):
-        messages.error(request, 'Выберите курс для массовой операции.')
+        courses = list(Course.objects.filter(pk__in=course_ids))
+    except (TypeError, ValueError):
+        courses = []
+    if not courses or len(courses) != len(set(course_ids)):
+        messages.error(request, 'Выберите хотя бы один курс для массовой операции.')
         return redirect('assignments')
     department_ids = request.POST.getlist('departments')
     employee_type_ids = request.POST.getlist('employee_types')
-    if not department_ids and not employee_type_ids:
-        messages.error(request, 'Выберите хотя бы одну категорию или отделение.')
+    all_audience = request.POST.get('all_audience') == 'on'
+    if not all_audience and not department_ids and not employee_type_ids:
+        messages.error(request, 'Выберите хотя бы одну категорию или отделение либо отметьте «Все сотрудники».')
         return redirect('assignments')
-    assignments = Assignment.objects.select_for_update().filter(
-        course=course, status__in=ACTIVE_ASSIGNMENT_STATUSES,
-        user__is_active=True,
-    )
+    eligible_statuses = list(ACTIVE_ASSIGNMENT_STATUSES)
+    if request.POST.get('only_incomplete') == 'on':
+        eligible_statuses.append('FAILED')
+    assignment_scope = Assignment.objects.filter(
+        course_id__in=course_ids, user__is_active=True,
+    ).exclude(status__in=('CANCELLED', 'REASSIGNED'))
     if department_ids:
-        assignments = assignments.filter(user__profile__department_id__in=department_ids)
+        assignment_scope = assignment_scope.filter(user__profile__department_id__in=department_ids)
     if employee_type_ids:
-        assignments = assignments.filter(user__profile__employee_type_id__in=employee_type_ids)
+        assignment_scope = assignment_scope.filter(user__profile__employee_type_id__in=employee_type_ids)
     action = request.POST.get('action')
     with transaction.atomic():
+        latest_ids = []
+        seen_pairs = set()
+        for assignment_id, user_id, course_id in assignment_scope.order_by(
+            'user_id', 'course_id', '-assigned_at', '-id',
+        ).values_list('id', 'user_id', 'course_id'):
+            pair = (user_id, course_id)
+            if pair not in seen_pairs:
+                seen_pairs.add(pair)
+                latest_ids.append(assignment_id)
+        assignments = Assignment.objects.select_for_update().filter(
+            pk__in=latest_ids, status__in=eligible_statuses,
+        )
         selected = list(assignments.select_related('user', 'course').prefetch_related('attempts'))
         if not selected:
-            messages.warning(request, 'Для выбранной аудитории активных назначений этого курса не найдено.')
+            messages.warning(request, 'Для выбранных курсов и аудитории незавершённых назначений не найдено.')
             return redirect('assignments')
         if action == 'cancel':
             now = timezone.now()
@@ -780,7 +892,7 @@ def assignment_bulk_action(request):
             Assignment.objects.bulk_update(selected, ['status', 'cancelled_at', 'cancelled_by'])
             AuditLog.objects.create(
                 user=request.user, action='Массовая отмена назначений',
-                object_label=f'{course.title}: {len(selected)}',
+                object_label=f'Курсов: {len(courses)}; назначений: {len(selected)}',
             )
             messages.success(request, f'Отменено назначений: {len(selected)}. Записи сохранены в журнале назначений и скрыты из отчёта.')
             return redirect('assignments')
@@ -790,24 +902,36 @@ def assignment_bulk_action(request):
         try:
             due_date = datetime.strptime(request.POST['due_date'], '%Y-%m-%d').date()
             due_time = datetime.strptime(request.POST.get('due_time') or '23:59', '%H:%M').time()
-            passing_score = int(request.POST['passing_score'])
-            attempts_allowed = int(request.POST['attempts_allowed'])
+            passing_score_raw = request.POST.get('passing_score', '').strip()
+            attempts_allowed_raw = request.POST.get('attempts_allowed', '').strip()
+            passing_score = int(passing_score_raw) if passing_score_raw else None
+            attempts_allowed = int(attempts_allowed_raw) if attempts_allowed_raw else None
+            additional_attempts = int(request.POST.get('additional_attempts') or 0)
         except (KeyError, TypeError, ValueError):
             messages.error(request, 'Проверьте дату, время, порог и количество попыток.')
             return redirect('assignments')
-        if not 1 <= passing_score <= 100 or attempts_allowed < 1:
-            messages.error(request, 'Порог должен быть от 1 до 100%, а количество попыток — не меньше одной.')
+        if passing_score is not None and not 1 <= passing_score <= 100:
+            messages.error(request, 'Порог должен быть от 1 до 100%.')
+            return redirect('assignments')
+        if attempts_allowed is not None and attempts_allowed < 1:
+            messages.error(request, 'Количество попыток должно быть не меньше одной.')
+            return redirect('assignments')
+        if additional_attempts < 0:
+            messages.error(request, 'Количество дополнительных попыток не может быть отрицательным.')
+            return redirect('assignments')
+        if attempts_allowed is not None and additional_attempts:
+            messages.error(request, 'Укажите либо общее число попыток, либо количество дополнительных попыток.')
             return redirect('assignments')
         for assignment in selected:
             attempts_used = len(assignment.attempts.all())
-            if attempts_used and passing_score != assignment.passing_score:
+            if attempts_used and passing_score is not None and passing_score != assignment.passing_score:
                 messages.error(
                     request,
                     'Массовое изменение отменено: у части сотрудников уже есть попытки, '
                     'поэтому порог менять нельзя.',
                 )
                 return redirect('assignments')
-            if attempts_allowed < attempts_used:
+            if attempts_allowed is not None and attempts_allowed < attempts_used:
                 messages.error(
                     request,
                     'Массовое изменение отменено: новый лимит меньше числа уже использованных попыток.',
@@ -818,9 +942,13 @@ def assignment_bulk_action(request):
             attempts_used = len(assignment.attempts.all())
             assignment.due_date = due_date
             assignment.due_time = due_time
-            assignment.passing_score = passing_score
-            assignment.attempts_allowed = attempts_allowed
-            if attempts_used and attempts_used >= attempts_allowed:
+            if passing_score is not None:
+                assignment.passing_score = passing_score
+            if attempts_allowed is not None:
+                assignment.attempts_allowed = attempts_allowed
+            elif additional_attempts:
+                assignment.attempts_allowed += additional_attempts
+            if attempts_used and attempts_used >= assignment.attempts_allowed:
                 assignment.status = 'FAILED'
             elif now > assignment.deadline:
                 assignment.status = 'OVERDUE'
@@ -831,7 +959,7 @@ def assignment_bulk_action(request):
         ])
         AuditLog.objects.create(
             user=request.user, action='Массовое изменение назначений',
-            object_label=f'{course.title}: {len(selected)}',
+            object_label=f'Курсов: {len(courses)}; назначений: {len(selected)}',
         )
         messages.success(request, f'Обновлено назначений: {len(selected)}.')
     return redirect('assignments')

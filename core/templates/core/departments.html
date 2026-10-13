@@ -1,0 +1,21 @@
+{% extends 'core/base.html' %}
+{% block content %}
+<div class="topline">
+  <div><h1>Подразделения</h1><p class="muted">Создание, переименование и безопасное объединение подразделений.</p></div>
+  <a class="btn secondary" href="{% url 'employees' %}">К сотрудникам</a>
+</div>
+<form class="card" method="post" action="{% url 'department_create' %}">{% csrf_token %}
+  <h2>Новое подразделение</h2>
+  <div class="form-grid"><div><label>Полное название</label><input name="name" maxlength="160" required></div></div>
+  <p><button>Добавить подразделение</button></p>
+</form>
+<div class="card" style="overflow-x:auto">
+  <h2>Справочник подразделений</h2>
+  <table><tr><th>Название</th><th>Сотрудники</th><th>Документы</th><th>Переименование</th><th>Объединение</th></tr>
+  {% for department in departments %}<tr>
+    <td>{{ department.name }}</td><td>{{ department.staff_count }}</td><td>{{ department.document_count }}</td>
+    <td><form method="post" action="{% url 'department_edit' department.id %}" class="actions">{% csrf_token %}<input name="name" maxlength="160" value="{{ department.name }}" required><button>Сохранить</button></form></td>
+    <td><form method="post" action="{% url 'department_merge' department.id %}" onsubmit="return confirm('Перенести сотрудников и документы в выбранное подразделение? Текущее подразделение будет удалено.');">{% csrf_token %}<select name="target" required><option value="">Куда перенести</option>{% for target in departments %}{% if target.id != department.id %}<option value="{{ target.id }}">{{ target.name }}</option>{% endif %}{% endfor %}</select><p><button class="btn danger">Объединить</button></p></form></td>
+  </tr>{% empty %}<tr><td colspan="5">Подразделений пока нет.</td></tr>{% endfor %}</table>
+</div>
+{% endblock %}

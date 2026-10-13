@@ -673,3 +673,113 @@ class LearningPortalTests(TestCase):
             'action': 'cancel', 'course': self.course.id,
             'employee_types': [self.employee.profile.employee_type_id],
         }).status_code, 403)
+
+    def test_bulk_extension_supports_multiple_courses_and_reopens_failed(self):
+        TestAttempt.objects.create(
+            assignment=self.assignment, number=1, correct_answers=0,
+            score=40, passed=False,
+        )
+        self.assignment.status = 'FAILED'
+        self.assignment.save(update_fields=['status'])
+        second_course = Course.objects.create(
+            direction=self.course.direction, title='Второй тестовый курс',
+        )
+        second_test = Test.objects.create(
+            course=second_course, title='Второй итоговый тест', status='PUBLISHED',
+        )
+        Question.objects.create(
+            test=second_test, text='Второй вопрос?', options=['Да', 'Нет'],
+            correct_index=0, correct_indexes=[0],
+        )
+        second_assignment = Assignment.objects.create(
+            user=self.employee, course=second_course, test_version=second_test,
+            due_date=timezone.localdate() - timedelta(days=1),
+            status='OVERDUE', passing_score=80, attempts_allowed=2,
+        )
+        completed_user = User.objects.create_user('completed-user', password='test-password')
+        Profile.objects.create(
+            user=completed_user, role='EMPLOYEE',
+            department=self.employee.profile.department,
+            employee_type=self.employee.profile.employee_type, position='Врач',
+        )
+        completed = Assignment.objects.create(
+            user=completed_user, course=self.course, test_version=self.test,
+            due_date=timezone.localdate() - timedelta(days=1),
+            status='COMPLETED', completed_at=timezone.now(),
+            passing_score=80, attempts_allowed=1,
+        )
+        self.client.login(username='methodist', password='test-password')
+        new_due_date = timezone.localdate() + timedelta(days=10)
+        response = self.client.post(reverse('assignment_bulk'), {
+            'action': 'edit', 'courses': [self.course.id, second_course.id],
+            'all_audience': 'on', 'only_incomplete': 'on',
+            'due_date': new_due_date.isoformat(), 'due_time': '23:59',
+            'additional_attempts': 1,
+        }, follow=True)
+        self.assertContains(response, 'Обновлено назначений: 2')
+        self.assignment.refresh_from_db()
+        second_assignment.refresh_from_db()
+        completed.refresh_from_db()
+        self.assertEqual(self.assignment.status, 'ASSIGNED')
+        self.assertEqual(self.assignment.attempts_allowed, 2)
+        self.assertEqual(second_assignment.status, 'ASSIGNED')
+        self.assertEqual(second_assignment.attempts_allowed, 3)
+        self.assertEqual(self.assignment.due_date, new_due_date)
+        self.assertEqual(second_assignment.due_date, new_due_date)
+        self.assertEqual(completed.status, 'COMPLETED')
+        self.assertNotEqual(completed.due_date, new_due_date)
+
+    def test_bulk_extension_changes_only_latest_course_cycle(self):
+        old_due_date = timezone.localdate() - timedelta(days=60)
+        self.assignment.due_date = old_due_date
+        self.assignment.status = 'FAILED'
+        self.assignment.save(update_fields=['due_date', 'status'])
+        latest = Assignment.objects.create(
+            user=self.employee, course=self.course, test_version=self.test,
+            due_date=timezone.localdate() - timedelta(days=1),
+            status='OVERDUE', passing_score=80, attempts_allowed=2,
+        )
+        self.client.login(username='methodist', password='test-password')
+        new_due_date = timezone.localdate() + timedelta(days=10)
+        response = self.client.post(reverse('assignment_bulk'), {
+            'action': 'edit', 'courses': [self.course.id],
+            'all_audience': 'on', 'only_incomplete': 'on',
+            'due_date': new_due_date.isoformat(), 'due_time': '23:59',
+            'additional_attempts': 0,
+        }, follow=True)
+        self.assertContains(response, 'Обновлено назначений: 1')
+        self.assignment.refresh_from_db()
+        latest.refresh_from_db()
+        self.assertEqual(self.assignment.due_date, old_due_date)
+        self.assertEqual(self.assignment.status, 'FAILED')
+        self.assertEqual(latest.due_date, new_due_date)
+        self.assertEqual(latest.status, 'ASSIGNED')
+
+    def test_admin_can_create_rename_and_merge_departments(self):
+        self.client.login(username='sysadmin', password='admin-password')
+        self.client.post(reverse('department_create'), {'name': 'Новое подразделение'})
+        source = Department.objects.get(name='Новое подразделение')
+        self.client.post(reverse('department_edit', args=[source.id]), {
+            'name': 'Переименованное подразделение',
+        })
+        source.refresh_from_db()
+        self.assertEqual(source.name, 'Переименованное подразделение')
+        target = Department.objects.create(name='Целевое подразделение')
+        colleague = User.objects.create_user('department-colleague', password='test-password')
+        colleague_profile = Profile.objects.create(
+            user=colleague, role='EMPLOYEE', department=source,
+            employee_type=self.employee.profile.employee_type, position='Врач',
+        )
+        self.client.post(reverse('department_merge', args=[source.id]), {
+            'target': target.id,
+        })
+        colleague_profile.refresh_from_db()
+        self.assertEqual(colleague_profile.department, target)
+        self.assertFalse(Department.objects.filter(pk=source.id).exists())
+
+    def test_methodist_cannot_manage_departments(self):
+        self.client.login(username='methodist', password='test-password')
+        self.assertEqual(self.client.get(reverse('departments')).status_code, 403)
+        self.assertEqual(self.client.post(reverse('department_create'), {
+            'name': 'Запрещённое подразделение',
+        }).status_code, 403)
