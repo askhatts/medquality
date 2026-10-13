@@ -308,7 +308,7 @@ class LearningPortalTests(TestCase):
         )
         self.assertEqual(
             [course.tests.get(is_current=True).questions.count() for course in courses],
-            [10, 10, 9],
+            [10, 10, 10],
         )
         # employee and methodist are staff; sysadmin is deliberately excluded.
         history = Assignment.objects.filter(demo_key__contains='-history-202603:')
@@ -324,6 +324,50 @@ class LearningPortalTests(TestCase):
                 date(2026, 3, 4),
             },
         )
+
+    def test_replace_mcbp6_test_creates_ten_question_version_for_only_incomplete_cycles(self):
+        call_command('load_mcbp346')
+        course = Course.objects.get(title='МЦБП 6 — Профилактика падений')
+        old_test = course.tests.get(is_current=True)
+        incomplete = Assignment.objects.create(
+            user=self.employee, course=course, test_version=old_test,
+            due_date=date(2030, 1, 1),
+            passing_score=80, attempts_allowed=2, status='FAILED',
+        )
+        TestAttempt.objects.create(
+            assignment=incomplete, number=1, correct_answers=7, score=78, passed=False,
+        )
+        completed = Assignment.objects.create(
+            user=self.admin, course=course, test_version=old_test,
+            due_date=date(2030, 1, 1), passing_score=80, attempts_allowed=1,
+            status='COMPLETED', completed_at=timezone.now(),
+        )
+        TestAttempt.objects.create(
+            assignment=completed, number=1, correct_answers=9, score=100, passed=True,
+        )
+
+        call_command('replace_mcbp6_test')
+        call_command('replace_mcbp6_test')
+
+        old_test.refresh_from_db()
+        corrected = course.tests.get(is_current=True)
+        incomplete.refresh_from_db()
+        self.assertFalse(old_test.is_current)
+        self.assertEqual(corrected.version, 2)
+        self.assertEqual(corrected.questions.count(), 10)
+        self.assertEqual(
+            list(corrected.questions.values_list('correct_index', flat=True)),
+            [1, 2, 1, 3, 0, 2, 0, 3, 1, 2],
+        )
+        self.assertEqual(incomplete.status, 'REASSIGNED')
+        self.assertEqual(incomplete.attempts.count(), 1)
+        replacement = Assignment.objects.get(user=self.employee, course=course, test_version=corrected)
+        self.assertEqual(replacement.status, 'ASSIGNED')
+        self.assertEqual(replacement.attempts.count(), 0)
+        self.assertEqual(replacement.due_date, date(2030, 1, 1))
+        completed.refresh_from_db()
+        self.assertEqual(completed.status, 'COMPLETED')
+        self.assertEqual(completed.test_version, old_test)
 
     def test_category_and_department_assignment_uses_intersection(self):
         doctor = EmployeeType.objects.get(name='Врач')
