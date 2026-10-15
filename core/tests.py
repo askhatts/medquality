@@ -432,6 +432,36 @@ class LearningPortalTests(TestCase):
         self.assertTrue(Assignment.objects.filter(user=nurse, course=self.course).exists())
         self.assertFalse(Assignment.objects.filter(user=self.employee, course=self.course).exists())
 
+    def test_assignment_employee_search_matches_active_employee_list(self):
+        inactive = User.objects.create_user('inactive-user', password='test-password', is_active=False)
+        Profile.objects.create(
+            user=inactive, role='EMPLOYEE', department=self.employee.profile.department,
+            employee_type=self.employee.profile.employee_type, position='Врач',
+        )
+        self.client.login(username='methodist', password='test-password')
+        response = self.client.get(reverse('assignments'))
+        expected_ids = set(Profile.objects.filter(user__is_active=True).values_list('user_id', flat=True))
+        displayed_ids = set(response.context['employees'].values_list('user_id', flat=True))
+        self.assertEqual(displayed_ids, expected_ids)
+        self.assertContains(response, 'id="employee-search"')
+        self.assertContains(response, 'Выбрать найденных')
+        self.assertContains(response, '(employee)')
+        self.assertNotContains(response, 'inactive-user')
+
+    def test_assignment_rejects_tampered_inactive_employee_selection(self):
+        inactive = User.objects.create_user('inactive-target', password='test-password', is_active=False)
+        Profile.objects.create(
+            user=inactive, role='EMPLOYEE', department=self.employee.profile.department,
+            employee_type=self.employee.profile.employee_type, position='Врач',
+        )
+        self.client.login(username='methodist', password='test-password')
+        response = self.client.post(reverse('assignment_new'), {
+            'course': self.course.id, 'due_date': '2030-01-01', 'due_time': '22:00',
+            'passing_score': 80, 'attempts_allowed': 2, 'users': [inactive.id],
+        })
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(Assignment.objects.filter(user=inactive, course=self.course).exists())
+
     def test_forgot_password_is_generic_and_does_not_duplicate_requests(self):
         existing = self.client.post(reverse('forgot_password'), {
             'username': 'employee', 'contact_method': 'WHATSAPP',

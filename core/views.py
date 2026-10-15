@@ -861,7 +861,15 @@ def create_assignment(request):
     if not test: return HttpResponse('Сначала опубликуйте итоговый тест курса.',status=409)
     due=datetime.strptime(request.POST['due_date'],'%Y-%m-%d').date()
     due_time=datetime.strptime(request.POST.get('due_time') or '23:59','%H:%M').time()
-    user_ids=set(request.POST.getlist('users'))
+    requested_user_ids = [value for value in request.POST.getlist('users') if value.isdigit()]
+    # The browser list and the server use the same source of truth.  A modified
+    # POST therefore cannot assign a course to an inactive account or a user
+    # without an employee profile.
+    user_ids = set(
+        Profile.objects.filter(
+            user__is_active=True, user_id__in=requested_user_ids,
+        ).values_list('user_id', flat=True)
+    )
     department_ids=request.POST.getlist('departments')
     employee_type_ids=request.POST.getlist('employee_types')
     audience = Profile.objects.filter(user__is_active=True)
