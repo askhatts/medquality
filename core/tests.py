@@ -2,6 +2,7 @@ from datetime import date, timedelta
 from io import BytesIO
 from django.conf import settings
 from django.contrib.auth.models import User
+from django.contrib.staticfiles import finders
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
 from django.db.models.deletion import ProtectedError
@@ -25,6 +26,17 @@ class LearningPortalTests(TestCase):
         self.test = Test.objects.create(course=self.course, title='Итоговый тест', status='PUBLISHED'); Question.objects.create(test=self.test, text='Верный вариант?', options=['Да','Нет'], correct_index=0, correct_indexes=[0])
         self.assignment = Assignment.objects.create(user=self.employee, course=self.course, test_version=self.test, due_date=timezone.localdate()+timedelta(days=1), passing_score=80, attempts_allowed=1)
     def test_closed_dashboard(self): self.assertRedirects(self.client.get(reverse('dashboard')), '/quality/login/?next=/quality/')
+    def test_login_and_portal_use_cyamio_branding(self):
+        login_page = self.client.get(reverse('login'))
+        self.assertContains(login_page, 'login-brand-logo')
+        self.assertContains(login_page, 'cyamio-logo.png')
+        self.assertContains(login_page, 'Портал непрерывного повышения качества медицинских услуг')
+        self.assertIsNotNone(finders.find('core/cyamio-logo.png'))
+
+        self.client.login(username='sysadmin', password='admin-password')
+        portal_page = self.client.get(reverse('dashboard'))
+        self.assertContains(portal_page, 'sidebar-logo')
+        self.assertContains(portal_page, 'Эмблема ЦЯМиО')
     def test_department_assignment_creates_personal_assignment(self):
         self.client.login(username='methodist', password='test-password'); response = self.client.post(reverse('assignment_new'), {'course':self.course.id,'due_date':'2030-01-01','due_time':'22:00','passing_score':90,'attempts_allowed':2,'departments':[self.employee.profile.department_id]})
         self.assertEqual(response.status_code, 302); self.assignment.refresh_from_db()
