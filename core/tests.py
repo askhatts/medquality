@@ -249,11 +249,41 @@ class LearningPortalTests(TestCase):
         self.assertIn('inline', inline.headers['Content-Disposition'])
         self.assertIn('attachment', download.headers['Content-Disposition'])
 
-    def test_sidebar_uses_directions_instead_of_course_list(self):
+    def test_assigned_courses_show_only_latest_assignments_with_a_test(self):
+        unassigned = Course.objects.create(
+            direction=self.course.direction, title='Доступный, но не назначенный курс',
+        )
+        no_test_course = Course.objects.create(
+            direction=self.course.direction, title='Назначение без теста',
+        )
+        Assignment.objects.create(
+            user=self.employee, course=no_test_course,
+            due_date=timezone.localdate() + timedelta(days=2),
+        )
         self.client.login(username='employee', password='test-password')
-        response = self.client.get(reverse('directions'))
-        self.assertContains(response, 'Направления качества')
-        self.assertRedirects(self.client.get(reverse('courses')), reverse('directions'))
+
+        response = self.client.get(reverse('courses'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, self.course.title)
+        self.assertContains(response, self.test.title)
+        self.assertNotContains(response, unassigned.title)
+        self.assertNotContains(response, no_test_course.title)
+        self.assertContains(response, 'Здесь показаны только курсы, по которым вам назначен итоговый тест.')
+
+    def test_cancelled_latest_assignment_hides_course_from_assigned_list(self):
+        self.assignment.status = 'REASSIGNED'
+        self.assignment.save(update_fields=['status'])
+        Assignment.objects.create(
+            user=self.employee, course=self.course, test_version=self.test,
+            due_date=timezone.localdate() + timedelta(days=3), status='CANCELLED',
+        )
+        self.client.login(username='employee', password='test-password')
+
+        response = self.client.get(reverse('courses'))
+
+        self.assertNotContains(response, self.course.title)
+        self.assertContains(response, 'Назначенных курсов пока нет')
 
     def test_google_drive_material_is_embedded_and_opens_in_new_tab(self):
         lesson = Lesson.objects.create(

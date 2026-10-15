@@ -289,7 +289,27 @@ def direction_detail(request, pk):
 
 @login_required
 def courses(request):
-    return redirect('directions')
+    # One card per course: only the newest assignment cycle defines whether
+    # the course is currently assigned. Cancelled/reassigned cycles and old
+    # records must not make a course reappear in the employee's list.
+    latest_by_course = {}
+    assignments = Assignment.objects.filter(
+        user=request.user,
+        course__active=True,
+    ).select_related('course', 'course__direction', 'test_version').prefetch_related('attempts')
+    for assignment in assignments:
+        latest_by_course.setdefault(assignment.course_id, assignment)
+
+    my_assignments = []
+    for assignment in latest_by_course.values():
+        if assignment.status in ('CANCELLED', 'REASSIGNED') or not assignment.test_version_id:
+            continue
+        attempts = list(assignment.attempts.all())
+        assignment.latest_attempt = attempts[-1] if attempts else None
+        assignment.display_status = 'Просрочено' if assignment.is_overdue else assignment.get_status_display()
+        my_assignments.append(assignment)
+    my_assignments.sort(key=lambda item: item.course.title.casefold())
+    return render(request, 'core/courses.html', {'my_assignments': my_assignments})
 
 
 @login_required

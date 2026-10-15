@@ -15,7 +15,9 @@ def portal(request):
         password_request_count = PasswordResetRequest.objects.filter(status='PENDING').count()
     return {
         'notification_count': Assignment.objects.filter(
-            user=request.user, status__in=['ASSIGNED', 'IN_PROGRESS']
+            user=request.user,
+            status__in=['ASSIGNED', 'IN_PROGRESS', 'OVERDUE', 'FAILED'],
+            test_version__isnull=False,
         ).count(),
         'password_request_count': password_request_count,
         'session_idle_timeout_ms': settings.SESSION_COOKIE_AGE * 1000,

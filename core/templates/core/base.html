@@ -402,7 +402,7 @@
         <a class="{% if request.resolver_match.url_name == 'dashboard' %}active{% endif %}" href="{% url 'dashboard' %}">Главная</a>
         <a class="{% if request.resolver_match.url_name == 'directions' or request.resolver_match.url_name == 'direction' or request.resolver_match.url_name == 'course' %}active{% endif %}" href="{% url 'directions' %}">Направления качества</a>
         <a class="{% if request.resolver_match.url_name == 'document_bank' or request.resolver_match.url_name == 'document_new' or request.resolver_match.url_name == 'document_edit' %}active{% endif %}" href="{% url 'document_bank' %}">Банк документов</a>
-        <a href="{% url 'directions' %}"><span>Назначенные курсы</span><span class="nav-count">{{ notification_count }}</span></a>
+        <a class="{% if request.resolver_match.url_name == 'courses' %}active{% endif %}" href="{% url 'courses' %}"><span>Назначенные курсы</span><span class="nav-count">{{ notification_count }}</span></a>
 
         {% if user.profile.role == 'ADMIN' or user.profile.role == 'METHODIST' %}
         <div class="nav-label">Управление</div>

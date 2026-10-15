@@ -1,1 +1,38 @@
-{% extends 'core/base.html' %}{% block content %}<h1>Каталог курсов</h1><p class="muted">Материалы доступны для изучения. Тест открывается после назначения курса.</p>{% if my_assignments %}<div class="card" style="border-left:4px solid #12898b"><h2>Вам назначено обучение</h2><div class="actions">{% for a in my_assignments %}<a class="btn" href="{% url 'course' a.course_id %}">{{ a.course.title }}</a>{% endfor %}</div></div>{% endif %}<form class="card"><label>Категория</label><select name="direction"><option value="">Все категории</option>{% for d in directions %}<option value="{{ d.id }}" {% if selected_direction == d.id|stringformat:'s' %}selected{% endif %}>{{ d.title }}</option>{% endfor %}</select><p><button>Показать</button></p></form>{% for c in courses %}<article class="card"><span class="badge">{{ c.direction.title }}</span><h2><a href="{% url 'course' c.id %}">{{ c.title }}</a></h2><p class="muted">{{ c.description }}</p><p>{{ c.lessons.count }} материалов · <a href="{% url 'course' c.id %}">Открыть содержание →</a></p></article>{% empty %}<p>Курсы не найдены.</p>{% endfor %}{% endblock %}
+{% extends 'core/base.html' %}
+{% block title %}Назначенные курсы — Портал качества ЦЯМиО{% endblock %}
+{% block content %}
+<div class="topline">
+  <div>
+    <h1>Назначенные курсы</h1>
+    <p class="muted">Здесь показаны только курсы, по которым вам назначен итоговый тест.</p>
+  </div>
+  <a class="btn secondary" href="{% url 'directions' %}">Открыть все материалы</a>
+</div>
+
+<div class="grid">
+  {% for assignment in my_assignments %}
+  <article class="card">
+    <div class="topline">
+      <span class="badge">{{ assignment.course.direction.title }}</span>
+      <span class="badge">{{ assignment.display_status }}</span>
+    </div>
+    <h2>{{ assignment.course.title }}</h2>
+    {% if assignment.course.description %}<p class="muted">{{ assignment.course.description }}</p>{% endif %}
+    <p>
+      <strong>Тест:</strong> {{ assignment.test_version.title }}<br>
+      <span class="muted">Срок: {{ assignment.deadline|date:'d.m.Y H:i' }} · порог {{ assignment.passing_score }}% · попыток {{ assignment.attempts_allowed }}</span>
+    </p>
+    {% if assignment.latest_attempt %}
+      <p>Последний результат: <strong>{{ assignment.latest_attempt.score }}%</strong></p>
+    {% endif %}
+    <a class="btn" href="{% url 'course' assignment.course_id %}">Перейти к курсу</a>
+  </article>
+  {% empty %}
+  <div class="card">
+    <h2>Назначенных курсов пока нет</h2>
+    <p class="muted">Когда вам назначат курс с итоговым тестом, он появится в этом разделе.</p>
+    <a class="btn secondary" href="{% url 'directions' %}">Посмотреть доступные материалы</a>
+  </div>
+  {% endfor %}
+</div>
+{% endblock %}
