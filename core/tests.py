@@ -325,6 +325,23 @@ class LearningPortalTests(TestCase):
             },
         )
 
+    def test_safety_and_communication_courses_are_idempotent_and_unassigned(self):
+        call_command('load_safety_communication_courses')
+        call_command('load_safety_communication_courses')
+        communication = Course.objects.get(title='Эффективная коммуникация с пациентом')
+        blue_code = Course.objects.get(title='Синий код: базовая реанимация и действия команды')
+        self.assertEqual(communication.direction.title, 'Коммуникация с пациентами и профессиональное развитие')
+        self.assertEqual(blue_code.direction.title, 'Коды безопасности и экстренное реагирование')
+        for course in (communication, blue_code):
+            self.assertTrue(course.active)
+            self.assertEqual(course.lessons.count(), 3)
+            self.assertTrue(all(lesson.drive_embed_url for lesson in course.lessons.all()))
+            test = course.tests.get(is_current=True)
+            self.assertEqual(test.status, 'PUBLISHED')
+            self.assertEqual(test.time_limit_minutes, 10)
+            self.assertEqual(test.questions.count(), 10)
+            self.assertFalse(Assignment.objects.filter(course=course).exists())
+
     def test_replace_mcbp6_test_creates_ten_question_version_for_only_incomplete_cycles(self):
         call_command('load_mcbp346')
         course = Course.objects.get(title='МЦБП 6 — Профилактика падений')
