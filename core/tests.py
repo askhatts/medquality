@@ -445,6 +445,8 @@ class LearningPortalTests(TestCase):
         self.assertEqual(displayed_ids, expected_ids)
         self.assertContains(response, 'id="employee-search"')
         self.assertContains(response, 'Выбрать найденных')
+        self.assertContains(response, "option.style.display = matches ? 'block' : 'none'")
+        self.assertContains(response, 'Подходящие сотрудники не найдены')
         self.assertContains(response, '(employee)')
         self.assertNotContains(response, 'inactive-user')
 

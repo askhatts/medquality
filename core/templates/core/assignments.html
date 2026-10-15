@@ -13,7 +13,7 @@
   <div class="grid">
     <div><label>Категории сотрудников</label><div class="checkboxes">{% for t in types %}<label><input type="checkbox" name="employee_types" value="{{ t.id }}" style="width:auto"> {{ t.name }}</label>{% endfor %}</div></div>
     <div><label>Отделы / отделения</label><div class="checkboxes">{% for d in departments %}<label><input type="checkbox" name="departments" value="{{ d.id }}" style="width:auto"> {{ d.name }}</label>{% endfor %}</div></div>
-    <div><label for="employee-search">Отдельные сотрудники</label><input id="employee-search" type="search" placeholder="ФИО, логин, категория или отделение" autocomplete="off"><div class="actions" style="margin:8px 0"><button class="btn secondary" type="button" id="select-found-employees">Выбрать найденных</button><button class="btn secondary" type="button" id="clear-employees">Снять выбор</button></div><small class="muted" id="employee-search-count"></small><div class="checkboxes" id="employee-options">{% for p in employees %}<label class="employee-option"><input type="checkbox" name="users" value="{{ p.user_id }}" style="width:auto"> {{ p.user.get_full_name|default:p.user.username }} <span class="muted">({{ p.user.username }})</span> — {{ p.employee_type|default:'без категории' }}, {{ p.department|default:'без отделения' }}</label>{% endfor %}</div></div>
+    <div><label for="employee-search">Отдельные сотрудники</label><input id="employee-search" type="search" placeholder="ФИО, логин, категория или отделение" autocomplete="off"><div class="actions" style="margin:8px 0"><button class="btn secondary" type="button" id="select-found-employees">Выбрать найденных</button><button class="btn secondary" type="button" id="clear-employees">Снять выбор</button></div><small class="muted" id="employee-search-count"></small><p class="muted" id="employee-search-empty" style="display:none">Подходящие сотрудники не найдены.</p><div class="checkboxes" id="employee-options">{% for p in employees %}<label class="employee-option"><input type="checkbox" name="users" value="{{ p.user_id }}" style="width:auto"> {{ p.user.get_full_name|default:p.user.username }} <span class="muted">({{ p.user.username }})</span> — {{ p.employee_type|default:'без категории' }}, {{ p.department|default:'без отделения' }}</label>{% endfor %}</div></div>
   </div>
   <p><button>Назначить обучение</button></p>
 </form>
@@ -55,15 +55,23 @@
   const search = document.getElementById('employee-search');
   const options = [...document.querySelectorAll('#employee-options .employee-option')];
   const count = document.getElementById('employee-search-count');
+  const empty = document.getElementById('employee-search-empty');
   if (!search || !options.length) return;
-  const visible = () => options.filter(option => !option.hidden);
+  const normalize = value => value.toLocaleLowerCase('ru-RU').replaceAll('ё', 'е').trim();
+  const visible = () => options.filter(option => option.style.display !== 'none');
   const updateCount = () => {
-    count.textContent = `Показано: ${visible().length} из ${options.length}`;
+    const found = visible().length;
+    count.textContent = search.value.trim()
+      ? `Найдено: ${found} из ${options.length}`
+      : `Всего сотрудников: ${options.length}`;
+    empty.style.display = found ? 'none' : 'block';
   };
   search.addEventListener('input', () => {
-    const query = search.value.trim().toLocaleLowerCase('ru-RU');
+    const terms = normalize(search.value).split(/\s+/).filter(Boolean);
     options.forEach(option => {
-      option.hidden = Boolean(query) && !option.textContent.toLocaleLowerCase('ru-RU').includes(query);
+      const value = normalize(option.textContent);
+      const matches = terms.every(term => value.includes(term));
+      option.style.display = matches ? 'block' : 'none';
     });
     updateCount();
   });
