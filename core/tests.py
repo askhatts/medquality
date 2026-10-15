@@ -27,9 +27,11 @@ class LearningPortalTests(TestCase):
         self.assignment = Assignment.objects.create(user=self.employee, course=self.course, test_version=self.test, due_date=timezone.localdate()+timedelta(days=1), passing_score=80, attempts_allowed=1)
     def test_closed_dashboard(self): self.assertRedirects(self.client.get(reverse('dashboard')), '/quality/login/?next=/quality/')
     def test_login_and_portal_use_cyamio_branding(self):
+        self.assertIn('whitenoise.middleware.WhiteNoiseMiddleware', settings.MIDDLEWARE)
         login_page = self.client.get(reverse('login'))
         self.assertContains(login_page, 'login-brand-logo')
-        self.assertContains(login_page, 'cyamio-logo.png')
+        self.assertContains(login_page, 'core/cyamio-logo')
+        self.assertContains(login_page, '.png')
         self.assertContains(login_page, 'Портал непрерывного повышения качества медицинских услуг')
         self.assertIsNotNone(finders.find('core/cyamio-logo.png'))
 
