@@ -2,6 +2,7 @@ from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 import random
+import re
 
 from django.conf import settings
 from django.contrib import messages
@@ -11,6 +12,7 @@ from django.contrib.auth.forms import PasswordChangeForm
 from django.contrib.auth.models import User
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
+from django.core.validators import validate_email
 from django.db import connection, transaction
 from django.db.models import Count, Prefetch
 from django.http import FileResponse, Http404, HttpResponse, HttpResponseForbidden
@@ -90,15 +92,58 @@ def login_view(request):
 
 def forgot_password(request):
     submitted = False
+    error = None
     if request.method == 'POST':
-        submitted = True
         username = request.POST.get('username', '').strip()
+        contact_method = request.POST.get('contact_method', '').strip()
+        contact_value = request.POST.get('contact_value', '').strip()
+        if contact_method not in dict(PasswordResetRequest.CONTACT_METHODS):
+            error = 'Выберите WhatsApp или электронную почту.'
+        elif contact_method == 'WHATSAPP':
+            digits = re.sub(r'\D', '', contact_value)
+            if not re.fullmatch(r'[\d\s()+-]+', contact_value) or not 10 <= len(digits) <= 15:
+                error = 'Укажите номер WhatsApp полностью, например +7 777 123 45 67.'
+            else:
+                contact_value = '+' + digits
+        else:
+            try:
+                validate_email(contact_value)
+            except ValidationError:
+                error = 'Укажите корректный адрес электронной почты.'
+            else:
+                contact_value = contact_value.lower()
+        if error:
+            return render(request, 'core/forgot_password.html', {
+                'submitted': False, 'error': error, 'contact_method': contact_method,
+                'contact_value': contact_value, 'username': username,
+            })
+        submitted = True
         user = User.objects.filter(
             username__iexact=username, is_active=True, profile__isnull=False,
         ).first()
         if user:
-            PasswordResetRequest.objects.get_or_create(user=user, status='PENDING')
-    return render(request, 'core/forgot_password.html', {'submitted': submitted})
+            password_request, created = PasswordResetRequest.objects.get_or_create(
+                user=user,
+                status='PENDING',
+                defaults={
+                    'contact_method': contact_method,
+                    'contact_value': contact_value,
+                },
+            )
+            # The latest contact is the one the employee can currently access.
+            # Updating a pending request does not disclose whether the username exists.
+            if not created and (
+                password_request.contact_method != contact_method
+                or password_request.contact_value != contact_value
+            ):
+                password_request.contact_method = contact_method
+                password_request.contact_value = contact_value
+                password_request.save(update_fields=['contact_method', 'contact_value'])
+            if created:
+                AuditLog.objects.create(
+                    user=user, action='Запрошено восстановление пароля', object_label=user.username,
+                )
+    return render(request, 'core/forgot_password.html', {'submitted': submitted, 'error': error})
 
 
 def logout_view(request): logout(request); return redirect('login')

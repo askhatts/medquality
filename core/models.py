@@ -27,12 +27,23 @@ class Profile(models.Model):
     def __str__(self): return f'{self.user.get_full_name() or self.user.username} — {self.get_role_display()}'
 
 class PasswordResetRequest(models.Model):
+    CONTACT_METHODS = [
+        ('WHATSAPP', 'WhatsApp'),
+        ('EMAIL', 'Электронная почта'),
+    ]
     STATUSES = [
         ('PENDING', 'Ожидает'),
         ('COMPLETED', 'Выполнен'),
         ('DISMISSED', 'Закрыт'),
     ]
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='password_reset_requests')
+    contact_method = models.CharField(
+        'Способ связи', max_length=12, choices=CONTACT_METHODS,
+        default='WHATSAPP',
+    )
+    contact_value = models.CharField(
+        'Контакт для временного пароля', max_length=254, blank=True,
+    )
     status = models.CharField('Статус', max_length=12, choices=STATUSES, default='PENDING')
     requested_at = models.DateTimeField('Запрошено', auto_now_add=True)
     resolved_at = models.DateTimeField('Обработано', null=True, blank=True)

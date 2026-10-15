@@ -416,9 +416,18 @@ class LearningPortalTests(TestCase):
         self.assertFalse(Assignment.objects.filter(user=self.employee, course=self.course).exists())
 
     def test_forgot_password_is_generic_and_does_not_duplicate_requests(self):
-        existing = self.client.post(reverse('forgot_password'), {'username': 'employee'})
-        repeated = self.client.post(reverse('forgot_password'), {'username': 'employee'})
-        unknown = self.client.post(reverse('forgot_password'), {'username': 'does-not-exist'})
+        existing = self.client.post(reverse('forgot_password'), {
+            'username': 'employee', 'contact_method': 'WHATSAPP',
+            'contact_value': '+7 777 123 45 67',
+        })
+        repeated = self.client.post(reverse('forgot_password'), {
+            'username': 'employee', 'contact_method': 'EMAIL',
+            'contact_value': 'employee@example.kz',
+        })
+        unknown = self.client.post(reverse('forgot_password'), {
+            'username': 'does-not-exist', 'contact_method': 'EMAIL',
+            'contact_value': 'unknown@example.kz',
+        })
         confirmation = 'Запрос принят. Если такой активный логин существует'
         self.assertContains(existing, confirmation)
         self.assertContains(repeated, confirmation)
@@ -427,8 +436,19 @@ class LearningPortalTests(TestCase):
             PasswordResetRequest.objects.filter(user=self.employee, status='PENDING').count(),
             1,
         )
+        password_request = PasswordResetRequest.objects.get(user=self.employee, status='PENDING')
+        self.assertEqual(password_request.contact_method, 'EMAIL')
+        self.assertEqual(password_request.contact_value, 'employee@example.kz')
         self.client.login(username='sysadmin', password='admin-password')
         self.assertContains(self.client.get(reverse('dashboard')), 'Запросы пароля: 1')
+        self.assertContains(self.client.get(reverse('password_requests')), 'employee@example.kz')
+
+    def test_forgot_password_validates_contact_without_disclosing_login(self):
+        response = self.client.post(reverse('forgot_password'), {
+            'username': 'employee', 'contact_method': 'WHATSAPP', 'contact_value': '123',
+        })
+        self.assertContains(response, 'Укажите номер WhatsApp полностью')
+        self.assertFalse(PasswordResetRequest.objects.exists())
 
     def test_admin_can_dismiss_password_request_without_reset(self):
         password_request = PasswordResetRequest.objects.create(user=self.employee)
