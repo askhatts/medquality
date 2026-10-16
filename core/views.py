@@ -20,7 +20,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.utils._os import safe_join
 from openpyxl import Workbook
-from openpyxl.styles import Font, PatternFill
+from openpyxl.styles import Alignment, Font, PatternFill
 
 from .models import (Assignment, AuditLog, Course, Department, EmployeeType,
                      InternalDocument, Lesson, PasswordResetRequest, Profile, QualityDirection,
@@ -177,9 +177,11 @@ def visible_assignments(user):
     return qs.filter(user=user)
 
 
-def filtered_assignments(request):
-    assignments = visible_assignments(request.user).exclude(status='CANCELLED')
-    for field, lookup in [('direction','course__direction_id'),('requirement','course__quality_requirements__id'),('course','course_id'),('department','user__profile__department_id'),('employee','user_id')]:
+def filtered_assignments(request, include_cancelled=False):
+    assignments = visible_assignments(request.user)
+    if not include_cancelled:
+        assignments = assignments.exclude(status='CANCELLED')
+    for field, lookup in [('direction','course__direction_id'),('requirement','course__quality_requirements__id'),('course','course_id'),('department','user__profile__department_id'),('employee_type','user__profile__employee_type_id'),('employee','user_id')]:
         value = request.GET.get(field)
         if value: assignments = assignments.filter(**{lookup: value})
     if request.GET.get('date_from'): assignments = assignments.filter(assigned_at__date__gte=request.GET['date_from'])
@@ -1127,69 +1129,275 @@ def assignment_cancel(request, pk):
     return redirect('assignments')
 
 
-def report_rows(request):
-    assignments = list(filtered_assignments(request))
-    users = {}
-    for assignment in assignments:
-        attempts = list(assignment.attempts.all())
-        users.setdefault(assignment.user_id, {
-            'user': assignment.user,
-            'assignments': [],
-        })['assignments'].append({
-            'assignment': assignment,
-            'last_attempt': attempts[-1] if attempts else None,
+def report_entry(assignment):
+    attempts = list(assignment.attempts.all())
+    last_attempt = attempts[-1] if attempts else None
+    status = 'OVERDUE' if assignment.is_overdue else assignment.status
+    return {
+        'assignment': assignment,
+        'user': assignment.user,
+        'profile': assignment.user.profile,
+        'course': assignment.course,
+        'last_attempt': last_attempt,
+        'score': last_attempt.score if last_attempt else None,
+        'result_at': last_attempt.completed_at if last_attempt else None,
+        'attempts_used': len(attempts),
+        'status': status,
+        'status_label': dict(Assignment.STATUS).get(status, status),
+    }
+
+
+def report_sort(rows, sort, order):
+    def name(row):
+        user = row['user']
+        return (user.get_full_name() or user.username).casefold()
+
+    keys = {
+        'employee': name,
+        'course': lambda row: row['course'].title.casefold(),
+        'assigned': lambda row: row['assignment'].assigned_at.timestamp(),
+        'due': lambda row: row['assignment'].deadline.timestamp(),
+        'status': lambda row: row['status_label'].casefold(),
+        'score': lambda row: row['score'] if row['score'] is not None else -1,
+        'completed': lambda row: row['result_at'].timestamp() if row['result_at'] else -1,
+        'attempts': lambda row: row['attempts_used'],
+    }
+    return sorted(rows, key=keys.get(sort, name), reverse=order == 'desc')
+
+
+def current_report_entries(assignments):
+    latest = {}
+    for assignment in sorted(assignments, key=lambda item: (item.assigned_at, item.id), reverse=True):
+        latest.setdefault((assignment.user_id, assignment.course_id), assignment)
+    return [
+        report_entry(assignment) for assignment in latest.values()
+        if assignment.status not in ('CANCELLED', 'REASSIGNED')
+    ]
+
+
+def status_filtered(entries, request):
+    status = request.GET.get('status', '')
+    return [entry for entry in entries if not status or entry['status'] == status]
+
+
+def report_data(request):
+    assignments = list(filtered_assignments(request, include_cancelled=True))
+    history_entries = status_filtered([
+        report_entry(assignment) for assignment in assignments
+        if assignment.status != 'CANCELLED'
+    ], request)
+    current_entries = status_filtered(current_report_entries(assignments), request)
+
+    sort = request.GET.get('sort', 'employee')
+    order = request.GET.get('order', 'asc')
+    if order not in ('asc', 'desc'):
+        order = 'asc'
+    history_rows = report_sort(history_entries, sort, order)
+
+    selected_course_id = request.GET.get('course')
+    selected_course = None
+    if selected_course_id:
+        selected_course = Course.objects.filter(pk=selected_course_id).first()
+    if not selected_course and current_entries:
+        selected_course = sorted(
+            {entry['course'] for entry in current_entries},
+            key=lambda course: course.title.casefold(),
+        )[0]
+    course_rows = [
+        entry for entry in current_entries
+        if selected_course and entry['course'].id == selected_course.id
+    ]
+    course_rows = report_sort(course_rows, sort, order)
+
+    matrix_courses = sorted(
+        {entry['course'] for entry in current_entries},
+        key=lambda course: course.title.casefold(),
+    )
+    matrix_users = {}
+    for entry in current_entries:
+        matrix_users.setdefault(entry['user'].id, {
+            'user': entry['user'], 'profile': entry['profile'], 'entries': {},
+        })['entries'][entry['course'].id] = entry
+    matrix_rows = []
+    for row in sorted(
+        matrix_users.values(),
+        key=lambda item: (item['user'].get_full_name() or item['user'].username).casefold(),
+    ):
+        row['cells'] = [row['entries'].get(course.id) for course in matrix_courses]
+        scores = [cell['score'] for cell in row['cells'] if cell and cell['score'] is not None]
+        row['average'] = round(sum(scores) / len(scores), 1) if scores else None
+        matrix_rows.append(row)
+
+    analytics = []
+    for course in matrix_courses:
+        rows = [entry for entry in current_entries if entry['course'].id == course.id]
+        scores = [entry['score'] for entry in rows if entry['score'] is not None]
+        counts = {key: sum(entry['status'] == key for entry in rows) for key, _ in Assignment.STATUS}
+        total = len(rows)
+        analytics.append({
+            'course': course,
+            'total': total,
+            'assigned': counts['ASSIGNED'],
+            'in_progress': counts['IN_PROGRESS'],
+            'completed': counts['COMPLETED'],
+            'failed': counts['FAILED'],
+            'overdue': counts['OVERDUE'],
+            'average': round(sum(scores) / len(scores), 1) if scores else None,
+            'completion_rate': round(counts['COMPLETED'] * 100 / total) if total else 0,
         })
-    max_assignments = max((len(row['assignments']) for row in users.values()), default=0)
-    assignment_numbers = list(range(1, max_assignments + 1))
-    rows = []
-    for row in sorted(users.values(), key=lambda item: (
-        item['user'].get_full_name() or item['user'].username
-    ).casefold()):
-        row['assignments'].sort(key=lambda item: (
-            item['assignment'].assigned_at, item['assignment'].id
-        ))
-        row['assignments'] += [None] * (max_assignments - len(row['assignments']))
-        rows.append(row)
-    return rows, assignment_numbers
+
+    selected_scores = [row['score'] for row in course_rows if row['score'] is not None]
+    selected_stats = {
+        'total': len(course_rows),
+        'assigned': sum(row['status'] == 'ASSIGNED' for row in course_rows),
+        'in_progress': sum(row['status'] == 'IN_PROGRESS' for row in course_rows),
+        'completed': sum(row['status'] == 'COMPLETED' for row in course_rows),
+        'failed': sum(row['status'] == 'FAILED' for row in course_rows),
+        'overdue': sum(row['status'] == 'OVERDUE' for row in course_rows),
+        'average': round(sum(selected_scores) / len(selected_scores), 1) if selected_scores else None,
+    }
+    selected_stats['completion_rate'] = (
+        round(selected_stats['completed'] * 100 / selected_stats['total'])
+        if selected_stats['total'] else 0
+    )
+    return {
+        'course_rows': course_rows,
+        'history_rows': history_rows,
+        'matrix_rows': matrix_rows,
+        'matrix_courses': matrix_courses,
+        'analytics': analytics,
+        'selected_course': selected_course,
+        'selected_stats': selected_stats,
+        'sort': sort,
+        'order': order,
+    }
 
 
 @login_required
 def reports(request):
     if role_in(request.user,'EMPLOYEE'): return deny(request.user)
-    rows, assignment_numbers = report_rows(request)
-    return render(request,'core/reports.html',{'report_rows':rows,'assignment_numbers':assignment_numbers,'directions':QualityDirection.objects.all(),'requirements':QualityRequirement.objects.all(),'courses':Course.objects.all(),'departments':Department.objects.all(),'employees':Profile.objects.select_related('user').all()})
+    data = report_data(request)
+    report_view = request.GET.get('view', 'course')
+    if report_view not in ('course', 'matrix', 'history'):
+        report_view = 'course'
+    base_query = request.GET.copy()
+    for key in ('view', 'sort', 'order'):
+        base_query.pop(key, None)
+    employees = Profile.objects.select_related('user')
+    if is_head(request.user):
+        employees = employees.filter(department=profile(request.user).department)
+    data.update({
+        'report_view': report_view,
+        'base_query': base_query.urlencode(),
+        'directions': QualityDirection.objects.all(),
+        'requirements': QualityRequirement.objects.all(),
+        'courses': Course.objects.all(),
+        'departments': Department.objects.all(),
+        'employee_types': EmployeeType.objects.all(),
+        'employees': employees,
+        'status_choices': Assignment.STATUS,
+        'selected_direction': request.GET.get('direction', ''),
+        'selected_course_id': request.GET.get('course', ''),
+        'selected_department': request.GET.get('department', ''),
+        'selected_employee_type': request.GET.get('employee_type', ''),
+        'selected_employee': request.GET.get('employee', ''),
+        'selected_status': request.GET.get('status', ''),
+        # Compatibility for callers that inspected the old context key.
+        'report_rows': data['history_rows'],
+    })
+    return render(request, 'core/reports.html', data)
 
 
 @login_required
 def report_excel(request):
     if role_in(request.user,'EMPLOYEE'): return deny(request.user)
-    rows, assignment_numbers = report_rows(request)
-    wb=Workbook(); ws=wb.active; ws.title='История обучения'
-    headers=['Сотрудник','Категория','Отдел / отделение','Должность']
-    for assignment_number in assignment_numbers:
-        headers.append(f'Назначение {assignment_number}')
-    ws.append(headers); fill=PatternFill('solid',fgColor='103B53')
-    for cell in ws[1]: cell.font=Font(color='FFFFFF',bold=True); cell.fill=fill
-    for row in rows:
-        user=row['user']; p=user.profile
-        values=[user.get_full_name() or user.username,str(p.employee_type or ''),str(p.department or ''),p.position]
-        for entry in row['assignments']:
-            if not entry:
-                values.append('')
-                continue
-            a=entry['assignment']
-            values.append(
-                f"{a.course.title} · назначено {timezone.localtime(a.assigned_at).strftime('%d.%m.%Y')} · "
-                f"срок {timezone.localtime(a.deadline).strftime('%d.%m.%Y %H:%M')} · {a.get_status_display()}"
-            )
-            last_attempt = entry['last_attempt']
-            if last_attempt:
-                values[-1] = (
-                    f"{a.course.title} · оценка {last_attempt.score}% · "
-                    f"пройдено {timezone.localtime(last_attempt.completed_at).strftime('%d.%m.%Y')}"
-                )
-            else:
-                values[-1] = f"{a.course.title} · нет результата"
-        ws.append(values)
-    for column in ws.columns: ws.column_dimensions[column[0].column_letter].width=min(48,max(14,max(len(str(x.value or '')) for x in column)+2))
-    data=BytesIO(); wb.save(data); response=HttpResponse(data.getvalue(),content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'); response['Content-Disposition']='attachment; filename="learning-results.xlsx"'; return response
+    data = report_data(request)
+    wb = Workbook()
+    journal = wb.active
+    journal.title = 'Журнал назначений'
+    journal.append([
+        'Сотрудник', 'Логин', 'Категория сотрудника', 'Отдел / отделение', 'Должность',
+        'Курс', 'Дата назначения', 'Срок прохождения', 'Статус', 'Последняя оценка, %',
+        'Дата результата', 'Использовано попыток', 'Разрешено попыток', 'Порог, %',
+    ])
+    for entry in data['history_rows']:
+        assignment = entry['assignment']
+        user = entry['user']
+        employee = entry['profile']
+        journal.append([
+            user.get_full_name() or user.username,
+            user.username,
+            str(employee.employee_type or ''),
+            str(employee.department or ''),
+            employee.position,
+            entry['course'].title,
+            timezone.localtime(assignment.assigned_at).replace(tzinfo=None),
+            timezone.localtime(assignment.deadline).replace(tzinfo=None),
+            entry['status_label'],
+            entry['score'],
+            timezone.localtime(entry['result_at']).replace(tzinfo=None) if entry['result_at'] else None,
+            entry['attempts_used'],
+            assignment.attempts_allowed,
+            assignment.passing_score,
+        ])
+
+    matrix = wb.create_sheet('Матрица обучения')
+    matrix.append([
+        'Сотрудник', 'Логин', 'Категория сотрудника', 'Отдел / отделение', 'Должность',
+        *[course.title for course in data['matrix_courses']], 'Средний балл, %',
+    ])
+    for row in data['matrix_rows']:
+        user = row['user']
+        employee = row['profile']
+        matrix.append([
+            user.get_full_name() or user.username,
+            user.username,
+            str(employee.employee_type or ''),
+            str(employee.department or ''),
+            employee.position,
+            *[
+                cell['score'] if cell and cell['score'] is not None
+                else (cell['status_label'] if cell else None)
+                for cell in row['cells']
+            ],
+            row['average'],
+        ])
+
+    analytics = wb.create_sheet('Аналитика по курсам')
+    analytics.append([
+        'Курс', 'Назначено сотрудникам', 'Ожидают начала', 'В процессе', 'Завершили',
+        'Не прошли', 'Просрочили', 'Средний балл, %', 'Процент завершения, %',
+    ])
+    for row in data['analytics']:
+        analytics.append([
+            row['course'].title, row['total'], row['assigned'], row['in_progress'],
+            row['completed'], row['failed'], row['overdue'], row['average'],
+            row['completion_rate'],
+        ])
+
+    header_fill = PatternFill('solid', fgColor='103B53')
+    for sheet in wb.worksheets:
+        sheet.freeze_panes = 'A2'
+        sheet.auto_filter.ref = sheet.dimensions
+        sheet.sheet_view.showGridLines = False
+        for cell in sheet[1]:
+            cell.font = Font(color='FFFFFF', bold=True)
+            cell.fill = header_fill
+            cell.alignment = Alignment(wrap_text=True, vertical='center')
+        sheet.row_dimensions[1].height = 34
+        for column in sheet.columns:
+            values = [len(str(cell.value or '')) for cell in column[:1000]]
+            sheet.column_dimensions[column[0].column_letter].width = min(42, max(12, max(values, default=10) + 2))
+    for row in range(2, journal.max_row + 1):
+        journal.cell(row, 7).number_format = 'dd.mm.yyyy hh:mm'
+        journal.cell(row, 8).number_format = 'dd.mm.yyyy hh:mm'
+        journal.cell(row, 11).number_format = 'dd.mm.yyyy hh:mm'
+
+    output = BytesIO()
+    wb.save(output)
+    response = HttpResponse(
+        output.getvalue(),
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    )
+    response['Content-Disposition'] = 'attachment; filename="learning-results.xlsx"'
+    return response

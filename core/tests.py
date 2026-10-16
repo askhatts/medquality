@@ -110,7 +110,7 @@ class LearningPortalTests(TestCase):
         self.assertEqual(cycles.count(), 2)
         self.assertEqual(cycles.filter(status='COMPLETED').count(), 1)
 
-    def test_report_places_attempts_in_separate_columns(self):
+    def test_report_separates_course_dates_and_numeric_result(self):
         self.assignment.attempts_allowed = 2
         self.assignment.save(update_fields=['attempts_allowed'])
         TestAttempt.objects.create(
@@ -121,29 +121,74 @@ class LearningPortalTests(TestCase):
             assignment=self.assignment, number=2, correct_answers=10,
             score=100, passed=True,
         )
-        Assignment.objects.create(
+        latest = Assignment.objects.create(
             user=self.employee, course=self.course, test_version=self.test,
             due_date=timezone.localdate() + timedelta(days=30),
             passing_score=80, attempts_allowed=2,
         )
+        TestAttempt.objects.create(
+            assignment=latest, number=1, correct_answers=9,
+            score=90, passed=True,
+        )
         self.client.login(username='methodist', password='test-password')
 
         page = self.client.get(reverse('reports'))
-        self.assertContains(page, 'Назначение 2')
-        self.assertContains(page, '100%')
+        self.assertContains(page, 'По курсу')
+        self.assertContains(page, 'Дата назначения')
+        self.assertContains(page, 'Результат')
+        self.assertContains(page, '90%')
         self.assertNotContains(page, 'Попытка 1')
+
+        history = self.client.get(reverse('reports'), {'view': 'history'})
+        self.assertEqual(len(history.context['history_rows']), 2)
+        self.assertContains(history, '100%')
 
         response = self.client.get(reverse('report_excel'))
         workbook = load_workbook(BytesIO(response.content))
-        sheet = workbook.active
+        self.assertEqual(
+            workbook.sheetnames,
+            ['Журнал назначений', 'Матрица обучения', 'Аналитика по курсам'],
+        )
+        sheet = workbook['Журнал назначений']
         headers = [cell.value for cell in sheet[1]]
-        first_assignment = 'Назначение 1'
-        self.assertIn(first_assignment, headers)
-        self.assertIn('Назначение 2', headers)
+        self.assertIn('Курс', headers)
+        self.assertIn('Дата назначения', headers)
+        self.assertIn('Последняя оценка, %', headers)
+        self.assertIn('Дата результата', headers)
         self.assertNotIn('Попытка 1', headers)
-        self.assertEqual(sheet.max_row, 2)
-        values = [cell.value for cell in sheet[2]]
-        self.assertIn('100%', values[headers.index(first_assignment)])
+        self.assertEqual(sheet.max_row, 3)
+        score_column = headers.index('Последняя оценка, %') + 1
+        self.assertEqual(
+            {sheet.cell(row, score_column).value for row in range(2, 4)},
+            {90, 100},
+        )
+        matrix = workbook['Матрица обучения']
+        matrix_headers = [cell.value for cell in matrix[1]]
+        self.assertIn(self.course.title, matrix_headers)
+        self.assertEqual(matrix.cell(2, matrix_headers.index(self.course.title) + 1).value, 90)
+
+    def test_course_report_sorts_scores_and_calculates_average(self):
+        TestAttempt.objects.create(
+            assignment=self.assignment, number=1, correct_answers=9,
+            score=90, passed=True,
+        )
+        methodist = User.objects.get(username='methodist')
+        second = Assignment.objects.create(
+            user=methodist, course=self.course, test_version=self.test,
+            due_date=timezone.localdate() + timedelta(days=2),
+            passing_score=80, attempts_allowed=2, status='COMPLETED',
+            completed_at=timezone.now(),
+        )
+        TestAttempt.objects.create(
+            assignment=second, number=1, correct_answers=8,
+            score=80, passed=True,
+        )
+        self.client.login(username='methodist', password='test-password')
+        page = self.client.get(reverse('reports'), {
+            'course': self.course.id, 'sort': 'score', 'order': 'desc',
+        })
+        self.assertEqual([row['score'] for row in page.context['course_rows']], [90, 80])
+        self.assertEqual(page.context['selected_stats']['average'], 85.0)
 
     def test_ten_reassignments_create_ten_distinct_history_cycles(self):
         self.assignment.delete()

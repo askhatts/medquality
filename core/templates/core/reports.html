@@ -1,6 +1,81 @@
 {% extends 'core/base.html' %}
 {% block content %}
-<div class="topline"><div><h1>История обучения</h1><p class="muted">Одна строка — один сотрудник. Для каждого назначения показана последняя оценка и дата прохождения. Отменённые назначения исключены.</p></div><a class="btn" href="{% url 'report_excel' %}?{{ request.GET.urlencode }}">Скачать Excel</a></div>
-<form class="card"><div class="form-grid"><div><label>Категория</label><select name="direction"><option value="">Все</option>{% for d in directions %}<option value="{{ d.id }}">{{ d.title }}</option>{% endfor %}</select></div><div><label>Курс</label><select name="course"><option value="">Все</option>{% for c in courses %}<option value="{{ c.id }}">{{ c.title }}</option>{% endfor %}</select></div><div><label>Отдел</label><select name="department"><option value="">Все</option>{% for d in departments %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}</select></div><div><label>Сотрудник</label><select name="employee"><option value="">Все</option>{% for p in employees %}<option value="{{ p.user_id }}">{{ p.user.get_full_name|default:p.user.username }}</option>{% endfor %}</select></div><div><label>Назначено с</label><input type="date" name="date_from" value="{{ request.GET.date_from }}"></div><div><label>Назначено по</label><input type="date" name="date_to" value="{{ request.GET.date_to }}"></div></div><p><button>Применить</button></p></form>
-<div class="card" style="overflow-x:auto"><table><thead><tr><th>Сотрудник</th>{% for number in assignment_numbers %}<th>Назначение {{ number }}</th>{% endfor %}</tr></thead><tbody>{% for row in report_rows %}<tr><td><b>{{ row.user.get_full_name|default:row.user.username }}</b><br><small>{{ row.user.username }} · {{ row.user.profile.employee_type }}</small></td>{% for entry in row.assignments %}<td>{% if entry %}{{ entry.assignment.course.title }}{% if entry.last_attempt %}<br><b>{{ entry.last_attempt.score }}%</b><br><small>{{ entry.last_attempt.completed_at|date:'d.m.Y' }}</small>{% else %}<br><small>Нет результата</small>{% endif %}{% else %}—{% endif %}</td>{% endfor %}</tr>{% empty %}<tr><td colspan="20">По выбранным фильтрам записей нет.</td></tr>{% endfor %}</tbody></table></div>
+<div class="topline">
+  <div><h1>Отчёты об обучении</h1><p class="muted">Оценки, даты и статусы хранятся в отдельных полях и доступны для сортировки и расчётов.</p></div>
+  <a class="btn" href="{% url 'report_excel' %}?{{ request.GET.urlencode }}">Скачать Excel</a>
+</div>
+
+<div class="tabs">
+  <a class="tab-link {% if report_view == 'course' %}active{% endif %}" href="?{% if base_query %}{{ base_query }}&{% endif %}view=course">По курсу</a>
+  <a class="tab-link {% if report_view == 'matrix' %}active{% endif %}" href="?{% if base_query %}{{ base_query }}&{% endif %}view=matrix">Матрица обучения</a>
+  <a class="tab-link {% if report_view == 'history' %}active{% endif %}" href="?{% if base_query %}{{ base_query }}&{% endif %}view=history">История назначений</a>
+</div>
+
+<form class="card" method="get">
+  <input type="hidden" name="view" value="{{ report_view }}">
+  <div class="form-grid">
+    <div><label>Направление качества</label><select name="direction"><option value="">Все направления</option>{% for d in directions %}<option value="{{ d.id }}" {% if selected_direction == d.id|stringformat:'s' %}selected{% endif %}>{{ d.title }}</option>{% endfor %}</select></div>
+    <div><label>Курс</label><select name="course"><option value="">Все курсы</option>{% for c in courses %}<option value="{{ c.id }}" {% if selected_course_id == c.id|stringformat:'s' or not selected_course_id and selected_course.id == c.id and report_view == 'course' %}selected{% endif %}>{{ c.title }}</option>{% endfor %}</select></div>
+    <div><label>Отдел / отделение</label><select name="department"><option value="">Все подразделения</option>{% for d in departments %}<option value="{{ d.id }}" {% if selected_department == d.id|stringformat:'s' %}selected{% endif %}>{{ d.name }}</option>{% endfor %}</select></div>
+    <div><label>Категория сотрудника</label><select name="employee_type"><option value="">Все категории</option>{% for kind in employee_types %}<option value="{{ kind.id }}" {% if selected_employee_type == kind.id|stringformat:'s' %}selected{% endif %}>{{ kind.name }}</option>{% endfor %}</select></div>
+    <div><label>Сотрудник</label><select name="employee"><option value="">Все сотрудники</option>{% for p in employees %}<option value="{{ p.user_id }}" {% if selected_employee == p.user_id|stringformat:'s' %}selected{% endif %}>{{ p.user.get_full_name|default:p.user.username }}</option>{% endfor %}</select></div>
+    <div><label>Статус</label><select name="status"><option value="">Все статусы</option>{% for value,label in status_choices %}{% if value != 'CANCELLED' %}<option value="{{ value }}" {% if selected_status == value %}selected{% endif %}>{{ label }}</option>{% endif %}{% endfor %}</select></div>
+    <div><label>Назначено с</label><input type="date" name="date_from" value="{{ request.GET.date_from }}"></div>
+    <div><label>Назначено по</label><input type="date" name="date_to" value="{{ request.GET.date_to }}"></div>
+  </div>
+  <div class="actions" style="margin-top:18px"><button>Применить фильтры</button><a class="btn secondary" href="?view={{ report_view }}">Сбросить</a></div>
+</form>
+
+{% if report_view == 'course' %}
+  {% if selected_course %}
+  <div class="card">
+    <p class="muted" style="margin-bottom:5px">Текущие результаты по курсу</p><h2>{{ selected_course.title }}</h2>
+    <div class="grid" style="margin-top:18px">
+      <div><div class="metric">{{ selected_stats.total }}</div><span class="muted">назначено</span></div>
+      <div><div class="metric">{{ selected_stats.assigned }}</div><span class="muted">ожидают начала</span></div>
+      <div><div class="metric">{{ selected_stats.in_progress }}</div><span class="muted">в процессе</span></div>
+      <div><div class="metric">{{ selected_stats.completed }}</div><span class="muted">завершили</span></div>
+      <div><div class="metric">{{ selected_stats.failed }}</div><span class="muted">не прошли</span></div>
+      <div><div class="metric">{{ selected_stats.overdue }}</div><span class="muted">просрочили</span></div>
+      <div><div class="metric">{% if selected_stats.average is not None %}{{ selected_stats.average }}%{% else %}—{% endif %}</div><span class="muted">средний балл</span></div>
+      <div><div class="metric">{{ selected_stats.completion_rate }}%</div><span class="muted">завершение курса</span></div>
+    </div>
+  </div>
+  <div class="card" style="overflow-x:auto"><table><thead><tr>
+    <th><a href="?{% if base_query %}{{ base_query }}&{% endif %}view=course&sort=employee&order={% if sort == 'employee' and order == 'asc' %}desc{% else %}asc{% endif %}">Сотрудник</a></th><th>Категория</th><th>Отделение</th>
+    <th><a href="?{% if base_query %}{{ base_query }}&{% endif %}view=course&sort=assigned&order={% if sort == 'assigned' and order == 'asc' %}desc{% else %}asc{% endif %}">Дата назначения</a></th>
+    <th><a href="?{% if base_query %}{{ base_query }}&{% endif %}view=course&sort=due&order={% if sort == 'due' and order == 'asc' %}desc{% else %}asc{% endif %}">Срок</a></th>
+    <th><a href="?{% if base_query %}{{ base_query }}&{% endif %}view=course&sort=status&order={% if sort == 'status' and order == 'asc' %}desc{% else %}asc{% endif %}">Статус</a></th>
+    <th><a href="?{% if base_query %}{{ base_query }}&{% endif %}view=course&sort=score&order={% if sort == 'score' and order == 'asc' %}desc{% else %}asc{% endif %}">Результат</a></th>
+    <th><a href="?{% if base_query %}{{ base_query }}&{% endif %}view=course&sort=completed&order={% if sort == 'completed' and order == 'asc' %}desc{% else %}asc{% endif %}">Дата результата</a></th><th>Попытки</th>
+  </tr></thead><tbody>{% for row in course_rows %}<tr>
+    <td><b>{{ row.user.get_full_name|default:row.user.username }}</b><br><small>{{ row.user.username }}</small></td><td>{{ row.profile.employee_type|default:'—' }}</td><td>{{ row.profile.department|default:'—' }}</td>
+    <td>{{ row.assignment.assigned_at|date:'d.m.Y H:i' }}</td><td>{{ row.assignment.deadline|date:'d.m.Y H:i' }}</td><td><span class="badge">{{ row.status_label }}</span></td>
+    <td>{% if row.score is not None %}<b>{{ row.score }}%</b>{% else %}—{% endif %}</td><td>{% if row.result_at %}{{ row.result_at|date:'d.m.Y H:i' }}{% else %}—{% endif %}</td><td>{{ row.attempts_used }} / {{ row.assignment.attempts_allowed }}</td>
+  </tr>{% empty %}<tr><td colspan="9">По выбранным фильтрам результатов нет.</td></tr>{% endfor %}</tbody></table></div>
+  {% else %}<div class="card"><p>Назначений по выбранным фильтрам пока нет.</p></div>{% endif %}
+
+{% elif report_view == 'matrix' %}
+  <div class="card"><h2>Матрица обучения</h2><p class="muted">Одна строка — один сотрудник, один столбец — один курс. Число означает последнюю оценку актуального назначения.</p></div>
+  <div class="card" style="overflow-x:auto"><table><thead><tr><th>Сотрудник</th><th>Отделение</th>{% for course in matrix_courses %}<th>{{ course.title }}</th>{% endfor %}<th>Средний балл</th></tr></thead><tbody>{% for row in matrix_rows %}<tr>
+    <td><b>{{ row.user.get_full_name|default:row.user.username }}</b><br><small>{{ row.user.username }} · {{ row.profile.employee_type|default:'—' }}</small></td><td>{{ row.profile.department|default:'—' }}</td>
+    {% for cell in row.cells %}<td>{% if cell %}{% if cell.score is not None %}<b>{{ cell.score }}%</b><br>{% endif %}<small>{{ cell.status_label }}</small>{% else %}—{% endif %}</td>{% endfor %}<td>{% if row.average is not None %}<b>{{ row.average }}%</b>{% else %}—{% endif %}</td>
+  </tr>{% empty %}<tr><td colspan="20">По выбранным фильтрам результатов нет.</td></tr>{% endfor %}</tbody></table></div>
+  <div class="card" style="overflow-x:auto"><h2>Аналитика по курсам</h2><table><thead><tr><th>Курс</th><th>Назначено</th><th>Ожидают</th><th>В процессе</th><th>Завершили</th><th>Не прошли</th><th>Просрочили</th><th>Средний балл</th><th>Завершение</th></tr></thead><tbody>{% for row in analytics %}<tr><td><b>{{ row.course.title }}</b></td><td>{{ row.total }}</td><td>{{ row.assigned }}</td><td>{{ row.in_progress }}</td><td>{{ row.completed }}</td><td>{{ row.failed }}</td><td>{{ row.overdue }}</td><td>{% if row.average is not None %}{{ row.average }}%{% else %}—{% endif %}</td><td>{{ row.completion_rate }}%</td></tr>{% empty %}<tr><td colspan="9">Нет данных.</td></tr>{% endfor %}</tbody></table></div>
+
+{% else %}
+  <div class="card"><h2>Полная история назначений</h2><p class="muted">Каждое повторное назначение хранится отдельной строкой. Отменённые назначения исключены.</p></div>
+  <div class="card" style="overflow-x:auto"><table><thead><tr>
+    <th><a href="?{% if base_query %}{{ base_query }}&{% endif %}view=history&sort=employee&order={% if sort == 'employee' and order == 'asc' %}desc{% else %}asc{% endif %}">Сотрудник</a></th>
+    <th><a href="?{% if base_query %}{{ base_query }}&{% endif %}view=history&sort=course&order={% if sort == 'course' and order == 'asc' %}desc{% else %}asc{% endif %}">Курс</a></th>
+    <th><a href="?{% if base_query %}{{ base_query }}&{% endif %}view=history&sort=assigned&order={% if sort == 'assigned' and order == 'asc' %}desc{% else %}asc{% endif %}">Дата назначения</a></th>
+    <th><a href="?{% if base_query %}{{ base_query }}&{% endif %}view=history&sort=due&order={% if sort == 'due' and order == 'asc' %}desc{% else %}asc{% endif %}">Срок</a></th>
+    <th><a href="?{% if base_query %}{{ base_query }}&{% endif %}view=history&sort=status&order={% if sort == 'status' and order == 'asc' %}desc{% else %}asc{% endif %}">Статус</a></th>
+    <th><a href="?{% if base_query %}{{ base_query }}&{% endif %}view=history&sort=score&order={% if sort == 'score' and order == 'asc' %}desc{% else %}asc{% endif %}">Результат</a></th>
+    <th><a href="?{% if base_query %}{{ base_query }}&{% endif %}view=history&sort=completed&order={% if sort == 'completed' and order == 'asc' %}desc{% else %}asc{% endif %}">Дата результата</a></th><th>Попытки</th><th>Порог</th>
+  </tr></thead><tbody>{% for row in history_rows %}<tr>
+    <td><b>{{ row.user.get_full_name|default:row.user.username }}</b><br><small>{{ row.user.username }} · {{ row.profile.department|default:'—' }}</small></td><td>{{ row.course.title }}</td><td>{{ row.assignment.assigned_at|date:'d.m.Y H:i' }}</td><td>{{ row.assignment.deadline|date:'d.m.Y H:i' }}</td>
+    <td><span class="badge">{{ row.status_label }}</span></td><td>{% if row.score is not None %}<b>{{ row.score }}%</b>{% else %}—{% endif %}</td><td>{% if row.result_at %}{{ row.result_at|date:'d.m.Y H:i' }}{% else %}—{% endif %}</td><td>{{ row.attempts_used }} / {{ row.assignment.attempts_allowed }}</td><td>{{ row.assignment.passing_score }}%</td>
+  </tr>{% empty %}<tr><td colspan="9">По выбранным фильтрам записей нет.</td></tr>{% endfor %}</tbody></table></div>
+{% endif %}
 {% endblock %}
