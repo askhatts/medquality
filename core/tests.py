@@ -293,6 +293,27 @@ class LearningPortalTests(TestCase):
         self.assertEqual(completed.context['active_count'], 0)
         self.assertEqual(completed.context['completed_count'], 1)
 
+    def test_reassigned_course_keeps_previous_completion_on_completed_tab(self):
+        self.assignment.status = 'COMPLETED'
+        self.assignment.completed_at = timezone.now() - timedelta(days=2)
+        self.assignment.save(update_fields=['status', 'completed_at'])
+        TestAttempt.objects.create(
+            assignment=self.assignment, number=1, correct_answers=1, score=100, passed=True,
+        )
+        Assignment.objects.create(
+            user=self.employee, course=self.course, test_version=self.test,
+            due_date=timezone.localdate() + timedelta(days=3), status='ASSIGNED',
+        )
+        self.client.login(username='employee', password='test-password')
+
+        active = self.client.get(reverse('courses'))
+        completed = self.client.get(reverse('courses') + '?tab=completed')
+
+        self.assertContains(active, self.course.title)
+        self.assertContains(completed, self.course.title)
+        self.assertEqual(active.context['active_count'], 1)
+        self.assertEqual(completed.context['completed_count'], 1)
+
     def test_cancelled_latest_assignment_hides_course_from_assigned_list(self):
         self.assignment.status = 'REASSIGNED'
         self.assignment.save(update_fields=['status'])

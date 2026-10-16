@@ -293,23 +293,30 @@ def courses(request):
     # the course is currently assigned. Cancelled/reassigned cycles and old
     # records must not make a course reappear in the employee's list.
     latest_by_course = {}
+    latest_completed_by_course = {}
     assignments = Assignment.objects.filter(
         user=request.user,
         course__active=True,
     ).select_related('course', 'course__direction', 'test_version').prefetch_related('attempts')
     for assignment in assignments:
         latest_by_course.setdefault(assignment.course_id, assignment)
+        if assignment.status == 'COMPLETED' and assignment.test_version_id:
+            latest_completed_by_course.setdefault(assignment.course_id, assignment)
 
     active_assignments = []
-    completed_assignments = []
     for assignment in latest_by_course.values():
-        if assignment.status in ('CANCELLED', 'REASSIGNED') or not assignment.test_version_id:
+        if assignment.status in ('CANCELLED', 'REASSIGNED', 'COMPLETED') or not assignment.test_version_id:
             continue
         attempts = list(assignment.attempts.all())
         assignment.latest_attempt = attempts[-1] if attempts else None
         assignment.display_status = 'Просрочено' if assignment.is_overdue else assignment.get_status_display()
-        target = completed_assignments if assignment.status == 'COMPLETED' else active_assignments
-        target.append(assignment)
+        active_assignments.append(assignment)
+    completed_assignments = []
+    for assignment in latest_completed_by_course.values():
+        attempts = list(assignment.attempts.all())
+        assignment.latest_attempt = attempts[-1] if attempts else None
+        assignment.display_status = assignment.get_status_display()
+        completed_assignments.append(assignment)
     active_assignments.sort(key=lambda item: item.course.title.casefold())
     completed_assignments.sort(key=lambda item: item.course.title.casefold())
     selected_tab = 'completed' if request.GET.get('tab') == 'completed' else 'active'
