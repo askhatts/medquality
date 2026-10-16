@@ -4,6 +4,7 @@ from django.core.management.base import BaseCommand
 from django.db import transaction
 
 from core.models import Course, Lesson, QualityDirection, Question, Test
+from core.training_content import BLUE_CODE_ADULT_QUESTIONS
 
 
 def drive_url(file_id):
@@ -251,6 +252,12 @@ COURSES = [
     },
 ]
 
+# The source Drive set originally included paediatric questions.  New portal
+# installations must use the adult-only bank; the corrective command safely
+# versions existing production tests and keeps their completed history intact.
+COURSES[1]['questions'] = BLUE_CODE_ADULT_QUESTIONS
+COURSES[1]['test_title'] = 'Итоговый тест: Синий код — базовая реанимация взрослых'
+
 
 class Command(BaseCommand):
     help = 'Создаёт не назначенные курсы по коммуникации с пациентом и синему коду из материалов Google Drive.'
@@ -318,7 +325,7 @@ class Command(BaseCommand):
                     )
                     for order, (text, answers, correct_index, explanation) in enumerate(spec['questions'], 1)
                 ])
-            test.title = f'Итоговый тест: {spec["title"]}'
+            test.title = spec.get('test_title', f'Итоговый тест: {spec["title"]}')
             test.instructions = 'Выберите один правильный ответ. Порядок вариантов ответа меняется автоматически.'
             test.time_limit_minutes = 10
             test.status = 'PUBLISHED'

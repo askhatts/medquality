@@ -11,6 +11,7 @@ from django.urls import reverse
 from django.utils import timezone
 from openpyxl import load_workbook
 from .models import Assignment, Course, Department, EmployeeType, InternalDocument, Lesson, PasswordResetRequest, Profile, QualityDirection, Question, Test, TestAttempt
+from .training_content import BLUE_CODE_ADULT_QUESTIONS
 
 class LearningPortalTests(TestCase):
     def test_health_reports_database_availability(self):
@@ -432,6 +433,72 @@ class LearningPortalTests(TestCase):
             self.assertEqual(test.time_limit_minutes, 10)
             self.assertEqual(test.questions.count(), 10)
             self.assertFalse(Assignment.objects.filter(course=course).exists())
+
+        blue_test = blue_code.tests.get(is_current=True)
+        self.assertEqual(blue_test.title, 'Итоговый тест: Синий код — базовая реанимация взрослых')
+        self.assertEqual(
+            list(blue_test.questions.order_by('order').values_list('text', flat=True)),
+            [item[0] for item in BLUE_CODE_ADULT_QUESTIONS],
+        )
+        combined_text = ' '.join(blue_test.questions.values_list('text', flat=True)).casefold()
+        self.assertNotIn('младен', combined_text)
+        self.assertNotIn('у детей', combined_text)
+        self.assertNotIn('ребен', combined_text)
+
+    def test_replace_blue_code_test_preserves_history_and_updates_only_incomplete_cycles(self):
+        call_command('load_safety_communication_courses')
+        course = Course.objects.get(title='Синий код: базовая реанимация и действия команды')
+        old_test = course.tests.get(is_current=True)
+        old_test.title = f'Итоговый тест: {course.title}'
+        old_test.save(update_fields=['title'])
+
+        incomplete = Assignment.objects.create(
+            user=self.employee, course=course, test_version=old_test,
+            due_date=date(2030, 10, 15), due_time='23:59',
+            passing_score=80, attempts_allowed=2, status='FAILED',
+        )
+        TestAttempt.objects.create(
+            assignment=incomplete, number=1, correct_answers=7, score=70, passed=False,
+        )
+        completed = Assignment.objects.create(
+            user=self.admin, course=course, test_version=old_test,
+            due_date=date(2030, 10, 15), passing_score=80, attempts_allowed=1,
+            status='COMPLETED', completed_at=timezone.now(),
+        )
+        TestAttempt.objects.create(
+            assignment=completed, number=1, correct_answers=9, score=90, passed=True,
+        )
+
+        call_command('replace_blue_code_adult_test')
+        call_command('replace_blue_code_adult_test')
+
+        old_test.refresh_from_db()
+        adult_test = course.tests.get(is_current=True)
+        incomplete.refresh_from_db()
+        completed.refresh_from_db()
+        self.assertFalse(old_test.is_current)
+        self.assertEqual(adult_test.version, old_test.version + 1)
+        self.assertEqual(adult_test.time_limit_minutes, 10)
+        self.assertEqual(adult_test.questions.count(), 10)
+        self.assertEqual(
+            list(adult_test.questions.order_by('order').values_list('correct_index', flat=True)),
+            [item[2] for item in BLUE_CODE_ADULT_QUESTIONS],
+        )
+        self.assertEqual(incomplete.status, 'REASSIGNED')
+        self.assertEqual(incomplete.attempts.count(), 1)
+        replacement = Assignment.objects.get(
+            user=self.employee, course=course, test_version=adult_test,
+        )
+        self.assertEqual(replacement.status, 'ASSIGNED')
+        self.assertEqual(replacement.due_date, date(2030, 10, 15))
+        self.assertEqual(replacement.due_time.strftime('%H:%M'), '23:59')
+        self.assertEqual(replacement.passing_score, 80)
+        self.assertEqual(replacement.attempts_allowed, 2)
+        self.assertEqual(replacement.attempts.count(), 0)
+        self.assertEqual(completed.status, 'COMPLETED')
+        self.assertEqual(completed.test_version, old_test)
+        self.assertEqual(completed.attempts.count(), 1)
+        self.assertEqual(course.tests.count(), 2)
 
     def test_replace_mcbp6_test_creates_ten_question_version_for_only_incomplete_cycles(self):
         call_command('load_mcbp346')
