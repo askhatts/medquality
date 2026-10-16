@@ -376,6 +376,10 @@ class LearningPortalTests(TestCase):
         blue_code = Course.objects.get(title='Синий код: базовая реанимация и действия команды')
         self.assertEqual(communication.direction.title, 'Коммуникация с пациентами и профессиональное развитие')
         self.assertEqual(blue_code.direction.title, 'Коды безопасности и экстренное реагирование')
+        self.assertEqual(
+            communication.lessons.order_by('order', 'id').first().title,
+            'Хирургическая точность в диалоге: Мастер-класс онкохирурга Вадима Гущина (Mercy Medical Center, США)',
+        )
         for course in (communication, blue_code):
             self.assertTrue(course.active)
             self.assertEqual(course.lessons.count(), 3)

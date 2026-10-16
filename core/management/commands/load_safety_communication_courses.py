@@ -23,7 +23,7 @@ COURSES = [
             'конструктивного разговора в сложных ситуациях.'
         ),
         'materials': [
-            ('Основы общения с пациентом', 'VIDEO', '1q22p5puQpI6hCRkK-jSqCryddkJ4uUg-'),
+            ('Хирургическая точность в диалоге: Мастер-класс онкохирурга Вадима Гущина (Mercy Medical Center, США)', 'VIDEO', '1q22p5puQpI6hCRkK-jSqCryddkJ4uUg-'),
             ('Коммуникативные навыки врача с пациентами — часть 1', 'VIDEO', '1uh89jqLVZM5pVVvrXdwTVsmB995y4GYP'),
             ('Коммуникация с пациентом — учебный материал', 'LINK', '1cjePTLW92Jo-DQGMz-Wddk5GR6fcQSBd'),
         ],
@@ -284,11 +284,17 @@ class Command(BaseCommand):
             course.save(update_fields=['direction', 'description', 'active'])
 
             for order, (title, kind, file_id) in enumerate(spec['materials'], 1):
-                lesson, _ = Lesson.objects.get_or_create(course=course, title=title)
+                material_url = drive_url(file_id)
+                lesson = Lesson.objects.filter(course=course, url=material_url).first()
+                if not lesson:
+                    lesson = Lesson.objects.filter(course=course, order=order).first()
+                if not lesson:
+                    lesson = Lesson(course=course)
+                lesson.title = title
                 lesson.category = 'LESSON'
                 lesson.kind = kind
                 lesson.order = order
-                lesson.url = drive_url(file_id)
+                lesson.url = material_url
                 lesson.file = ''
                 lesson.save()
 
