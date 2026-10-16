@@ -269,7 +269,29 @@ class LearningPortalTests(TestCase):
         self.assertContains(response, self.test.title)
         self.assertNotContains(response, unassigned.title)
         self.assertNotContains(response, no_test_course.title)
-        self.assertContains(response, 'Здесь показаны только курсы, по которым вам назначен итоговый тест.')
+        self.assertContains(response, 'К прохождению')
+        self.assertContains(response, 'Пройденные')
+        self.assertEqual(response.context['active_count'], 1)
+        self.assertEqual(response.context['completed_count'], 0)
+
+    def test_completed_courses_are_shown_only_on_completed_tab(self):
+        self.assignment.status = 'COMPLETED'
+        self.assignment.completed_at = timezone.now()
+        self.assignment.save(update_fields=['status', 'completed_at'])
+        TestAttempt.objects.create(
+            assignment=self.assignment, number=1, correct_answers=1, score=100, passed=True,
+        )
+        self.client.login(username='employee', password='test-password')
+
+        active = self.client.get(reverse('courses'))
+        completed = self.client.get(reverse('courses') + '?tab=completed')
+
+        self.assertNotContains(active, self.course.title)
+        self.assertContains(active, 'Курсов к прохождению пока нет')
+        self.assertContains(completed, self.course.title)
+        self.assertContains(completed, 'Последний результат: <strong>100%</strong>', html=True)
+        self.assertEqual(completed.context['active_count'], 0)
+        self.assertEqual(completed.context['completed_count'], 1)
 
     def test_cancelled_latest_assignment_hides_course_from_assigned_list(self):
         self.assignment.status = 'REASSIGNED'
@@ -283,7 +305,7 @@ class LearningPortalTests(TestCase):
         response = self.client.get(reverse('courses'))
 
         self.assertNotContains(response, self.course.title)
-        self.assertContains(response, 'Назначенных курсов пока нет')
+        self.assertContains(response, 'Курсов к прохождению пока нет')
 
     def test_google_drive_material_is_embedded_and_opens_in_new_tab(self):
         lesson = Lesson.objects.create(

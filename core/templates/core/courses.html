@@ -4,10 +4,19 @@
 <div class="topline">
   <div>
     <h1>Назначенные курсы</h1>
-    <p class="muted">Здесь показаны только курсы, по которым вам назначен итоговый тест.</p>
+    <p class="muted">Текущие назначения и завершённое обучение разделены по вкладкам.</p>
   </div>
   <a class="btn secondary" href="{% url 'directions' %}">Открыть все материалы</a>
 </div>
+
+<nav class="tabs" aria-label="Разделы назначенных курсов">
+  <a class="tab-link{% if selected_tab == 'active' %} active{% endif %}" href="{% url 'courses' %}">
+    <span>К прохождению</span><span class="nav-count">{{ active_count }}</span>
+  </a>
+  <a class="tab-link{% if selected_tab == 'completed' %} active{% endif %}" href="{% url 'courses' %}?tab=completed">
+    <span>Пройденные</span><span class="nav-count">{{ completed_count }}</span>
+  </a>
+</nav>
 
 <div class="grid">
   {% for assignment in my_assignments %}
@@ -29,8 +38,13 @@
   </article>
   {% empty %}
   <div class="card">
-    <h2>Назначенных курсов пока нет</h2>
-    <p class="muted">Когда вам назначат курс с итоговым тестом, он появится в этом разделе.</p>
+    {% if selected_tab == 'completed' %}
+      <h2>Пройденных курсов пока нет</h2>
+      <p class="muted">После успешного завершения курс появится на этой вкладке.</p>
+    {% else %}
+      <h2>Курсов к прохождению пока нет</h2>
+      <p class="muted">Когда вам назначат курс с итоговым тестом, он появится в этом разделе.</p>
+    {% endif %}
     <a class="btn secondary" href="{% url 'directions' %}">Посмотреть доступные материалы</a>
   </div>
   {% endfor %}

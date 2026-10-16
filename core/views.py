@@ -300,16 +300,26 @@ def courses(request):
     for assignment in assignments:
         latest_by_course.setdefault(assignment.course_id, assignment)
 
-    my_assignments = []
+    active_assignments = []
+    completed_assignments = []
     for assignment in latest_by_course.values():
         if assignment.status in ('CANCELLED', 'REASSIGNED') or not assignment.test_version_id:
             continue
         attempts = list(assignment.attempts.all())
         assignment.latest_attempt = attempts[-1] if attempts else None
         assignment.display_status = 'Просрочено' if assignment.is_overdue else assignment.get_status_display()
-        my_assignments.append(assignment)
-    my_assignments.sort(key=lambda item: item.course.title.casefold())
-    return render(request, 'core/courses.html', {'my_assignments': my_assignments})
+        target = completed_assignments if assignment.status == 'COMPLETED' else active_assignments
+        target.append(assignment)
+    active_assignments.sort(key=lambda item: item.course.title.casefold())
+    completed_assignments.sort(key=lambda item: item.course.title.casefold())
+    selected_tab = 'completed' if request.GET.get('tab') == 'completed' else 'active'
+    my_assignments = completed_assignments if selected_tab == 'completed' else active_assignments
+    return render(request, 'core/courses.html', {
+        'my_assignments': my_assignments,
+        'selected_tab': selected_tab,
+        'active_count': len(active_assignments),
+        'completed_count': len(completed_assignments),
+    })
 
 
 @login_required
