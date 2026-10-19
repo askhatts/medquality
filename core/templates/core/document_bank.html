@@ -1,1 +1,69 @@
-{% extends 'core/base.html' %}{% block content %}<div class="topline"><div><h1>Банк внутренних документов</h1><p class="muted">Актуальные и архивные версии.</p></div>{% if can_manage %}<a class="btn" href="{% url 'document_new' %}">Добавить документ</a>{% endif %}</div><form class="card"><div class="form-grid"><div><label>Поиск</label><input name="q" value="{{ request.GET.q }}"></div><div><label>Категория</label><select name="direction"><option value="">Все</option>{% for d in directions %}<option value="{{ d.id }}">{{ d.title }}</option>{% endfor %}</select></div><div><label>Отдел</label><select name="department"><option value="">Все</option>{% for d in departments %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}</select></div><div><label>Тип</label><select name="document_type"><option value="">Все</option>{% for value,label in document_types %}<option value="{{ value }}">{{ label }}</option>{% endfor %}</select></div><div><label>Статус</label><select name="status"><option value="">Все</option><option value="ACTIVE">Действует</option><option value="ARCHIVED">Архив</option></select></div></div><p><button>Найти</button></p></form><div class="card"><table><tr><th>Документ</th><th>Тип</th><th>Категория</th><th>Версия</th><th>Действия</th></tr>{% for doc in documents %}<tr><td><b>{{ doc.number }} {{ doc.title }}</b><br><small>{{ doc.tags }}</small></td><td>{{ doc.get_document_type_display }}</td><td>{{ doc.direction|default:'—' }}</td><td>{{ doc.version }} · {{ doc.get_status_display }}</td><td><div class="actions"><a target="_blank" rel="noopener" href="{{ doc.file.url }}">Открыть</a><a href="{{ doc.file.url }}?download=1">Скачать</a>{% if can_manage %}<a href="{% url 'document_edit' doc.id %}">Изменить</a>{% endif %}</div></td></tr>{% empty %}<tr><td colspan="5">Документы не найдены.</td></tr>{% endfor %}</table></div>{% endblock %}
+{% extends 'core/base.html' %}
+{% block content %}
+<div class="topline">
+  <div><h1>Банк внутренних документов</h1><p class="muted">Единый реестр документов, владельцев и сроков пересмотра.</p></div>
+  {% if can_manage %}<a class="btn" href="{% url 'document_new' %}">Добавить документ</a>{% endif %}
+</div>
+
+<div class="tabs">
+  <a class="tab-link {% if document_view == 'documents' %}active{% endif %}" href="?view=documents">Документы</a>
+  <a class="tab-link {% if document_view == 'analytics' %}active{% endif %}" href="?view=analytics">Аналитика и пересмотры</a>
+</div>
+
+{% if document_view == 'analytics' %}
+<div class="grid">
+  <div class="card"><div class="metric">{{ analytics.total }}</div><span class="muted">всего документов</span></div>
+  <div class="card"><div class="metric">{{ analytics.active }}</div><span class="muted">действуют</span></div>
+  <div class="card"><div class="metric">{{ analytics.archived }}</div><span class="muted">в архиве</span></div>
+  <div class="card"><div class="metric danger">{{ analytics.overdue }}</div><span class="muted">пересмотр просрочен</span></div>
+  <div class="card"><div class="metric warn">{{ analytics.due_soon }}</div><span class="muted">пересмотр в течение 30 дней</span></div>
+  <div class="card"><div class="metric">{{ analytics.no_review_date }}</div><span class="muted">без срока пересмотра</span></div>
+  <div class="card"><div class="metric">{{ analytics.owners }}</div><span class="muted">владельцев процессов</span></div>
+  <div class="card"><div class="metric warn">{{ analytics.missing_owner }}</div><span class="muted">без владельца</span></div>
+</div>
+
+<div class="card" style="overflow-x:auto">
+  <h2>Контроль пересмотров</h2>
+  <p class="muted">Просроченные документы, ближайшие пересмотры и документы без установленного срока.</p>
+  <table><thead><tr><th>Документ</th><th>Владелец процесса</th><th>Подразделение</th><th>Дата пересмотра</th><th>Состояние</th><th>Действия</th></tr></thead>
+  <tbody>{% for doc in review_documents %}<tr>
+    <td><b>{% if doc.number %}{{ doc.number }} — {% endif %}{{ doc.title }}</b><br><small>Версия {{ doc.version }}</small></td>
+    <td>{{ doc.owner|default:'Не указан' }}</td><td>{{ doc.department|default:'Общий документ' }}</td>
+    <td>{{ doc.review_due|date:'d.m.Y'|default:'Не указана' }}</td>
+    <td><span class="badge {% if doc.review_state == 'OVERDUE' %}danger{% elif doc.review_state == 'DUE_SOON' %}warn{% endif %}">{{ doc.review_state_label }}</span></td>
+    <td>{% if can_manage %}<a href="{% url 'document_edit' doc.id %}">Открыть карточку</a>{% else %}—{% endif %}</td>
+  </tr>{% empty %}<tr><td colspan="6">Документы, требующие внимания, отсутствуют.</td></tr>{% endfor %}</tbody></table>
+</div>
+
+<div class="card" style="overflow-x:auto">
+  <h2>Документы по владельцам процессов</h2>
+  <table><thead><tr><th>Владелец</th><th>Всего</th><th>Действуют</th><th>Архив</th><th>Просрочены</th><th>Скоро пересмотр</th></tr></thead>
+  <tbody>{% for row in owner_rows %}<tr><td><b>{{ row.owner }}</b></td><td>{{ row.total }}</td><td>{{ row.active }}</td><td>{{ row.archived }}</td><td>{{ row.overdue }}</td><td>{{ row.due_soon }}</td></tr>{% empty %}<tr><td colspan="6">Документов пока нет.</td></tr>{% endfor %}</tbody></table>
+</div>
+
+<div class="card"><h2>Источники документов</h2><p>Google Drive: <b>{{ analytics.drive }}</b> · Загруженные PDF: <b>{{ analytics.file }}</b></p></div>
+{% else %}
+<form class="card">
+  <input type="hidden" name="view" value="documents">
+  <div class="form-grid">
+    <div><label>Поиск</label><input name="q" value="{{ request.GET.q }}" placeholder="Название, номер, владелец или тег"></div>
+    <div><label>Направление</label><select name="direction"><option value="">Все</option>{% for d in directions %}<option value="{{ d.id }}" {% if selected_direction == d.id|stringformat:'s' %}selected{% endif %}>{{ d.title }}</option>{% endfor %}</select></div>
+    <div><label>Отдел / отделение</label><select name="department"><option value="">Все</option>{% for d in departments %}<option value="{{ d.id }}" {% if selected_department == d.id|stringformat:'s' %}selected{% endif %}>{{ d.name }}</option>{% endfor %}</select></div>
+    <div><label>Владелец процесса</label><input name="owner" value="{{ request.GET.owner }}"></div>
+    <div><label>Тип</label><select name="document_type"><option value="">Все</option>{% for value,label in document_types %}<option value="{{ value }}" {% if selected_type == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
+    <div><label>Статус документа</label><select name="status"><option value="">Все</option><option value="ACTIVE" {% if selected_status == 'ACTIVE' %}selected{% endif %}>Действует</option><option value="ARCHIVED" {% if selected_status == 'ARCHIVED' %}selected{% endif %}>Архив</option></select></div>
+    <div><label>Срок пересмотра</label><select name="review"><option value="">Все</option><option value="OVERDUE" {% if selected_review == 'OVERDUE' %}selected{% endif %}>Просрочен</option><option value="DUE_SOON" {% if selected_review == 'DUE_SOON' %}selected{% endif %}>В течение 30 дней</option><option value="NO_DATE" {% if selected_review == 'NO_DATE' %}selected{% endif %}>Не указан</option><option value="CURRENT" {% if selected_review == 'CURRENT' %}selected{% endif %}>В норме</option></select></div>
+  </div>
+  <div class="actions" style="margin-top:18px"><button>Применить</button><a class="btn secondary" href="?view=documents">Сбросить</a></div>
+</form>
+
+<div class="card" style="overflow-x:auto"><table><thead><tr><th>Документ</th><th>Тип</th><th>Владелец</th><th>Направление</th><th>Пересмотр</th><th>Источник</th><th>Действия</th></tr></thead>
+<tbody>{% for doc in documents %}<tr>
+  <td><b>{% if doc.number %}{{ doc.number }} — {% endif %}{{ doc.title }}</b><br><small>Версия {{ doc.version }} · {{ doc.get_status_display }}{% if doc.tags %} · {{ doc.tags }}{% endif %}</small></td>
+  <td>{{ doc.get_document_type_display }}</td><td>{{ doc.owner|default:'Не указан' }}<br><small>{{ doc.department|default:'Общий документ' }}</small></td><td>{{ doc.direction|default:'—' }}</td>
+  <td>{% if doc.review_due %}{{ doc.review_due|date:'d.m.Y' }}{% else %}—{% endif %}<br><small>{{ doc.review_state_label }}</small></td>
+  <td>{% if doc.external_url %}Google Drive{% elif doc.file %}PDF на сервере{% else %}Источник отсутствует{% endif %}</td>
+  <td><div class="actions">{% if doc.external_url %}<a target="_blank" rel="noopener noreferrer" href="{{ doc.external_url }}">Открыть в Google Drive</a>{% elif doc.file %}<a target="_blank" rel="noopener" href="{{ doc.file.url }}">Открыть</a><a href="{{ doc.file.url }}?download=1">Скачать</a>{% endif %}{% if can_manage %}<a href="{% url 'document_edit' doc.id %}">Изменить</a>{% endif %}</div></td>
+</tr>{% empty %}<tr><td colspan="7">Документы не найдены.</td></tr>{% endfor %}</tbody></table></div>
+{% endif %}
+{% endblock %}

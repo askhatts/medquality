@@ -1,1 +1,47 @@
-{% extends 'core/base.html' %}{% block content %}<h1>{% if document %}Редактирование документа{% else %}Новый документ{% endif %}</h1><form class="card" method="post" enctype="multipart/form-data">{% csrf_token %}<div class="form-grid"><div><label>Название</label><input name="title" value="{{ document.title|default:'' }}" required></div><div><label>Номер</label><input name="number" value="{{ document.number|default:'' }}"></div><div><label>Тип</label><select name="document_type">{% for value,label in document_types %}<option value="{{ value }}" {% if document.document_type == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></div><div><label>Версия</label><input name="version" value="{{ document.version|default:'1.0' }}" required></div><div><label>Владелец документа</label><input name="owner" value="{{ document.owner|default:'' }}"></div><div><label>Категория</label><select name="direction"><option value="">—</option>{% for d in directions %}<option value="{{ d.id }}" {% if document.direction_id == d.id %}selected{% endif %}>{{ d.title }}</option>{% endfor %}</select></div><div><label>Дата утверждения</label><input type="date" name="approved_at" value="{{ document.approved_at|date:'Y-m-d' }}"></div><div><label>Следующий пересмотр</label><input type="date" name="review_due" value="{{ document.review_due|date:'Y-m-d' }}"></div><div><label>Отдел</label><select name="department"><option value="">Общий</option>{% for d in departments %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}</select></div><div><label>Статус</label><select name="status"><option value="ACTIVE">Действует</option><option value="ARCHIVED">Архив</option></select></div><div><label>PDF</label><input type="file" name="file" accept="application/pdf" {% if not document %}required{% endif %}></div><div><label>Теги</label><input name="tags" value="{{ document.tags|default:'' }}"></div></div><label>Использовать в курсах</label><div class="checkboxes">{% for course in courses %}<label><input style="width:auto" type="checkbox" name="courses" value="{{ course.id }}" {% if document and course in document.courses.all %}checked{% endif %}> {{ course.title }}</label>{% endfor %}</div><p><button>Сохранить</button></p></form>{% endblock %}
+{% extends 'core/base.html' %}
+{% block content %}
+<div class="topline"><div><h1>{% if document %}Редактирование документа{% else %}Новый внутренний документ{% endif %}</h1><p class="muted">Заполните свойства документа и выберите один источник: Google Drive или PDF на сервере.</p></div><a href="{% url 'document_bank' %}">Вернуться в банк</a></div>
+<form class="card" method="post" enctype="multipart/form-data">{% csrf_token %}
+  <div class="form-grid">
+    <div><label>Название</label><input name="title" value="{{ document.title|default:'' }}" required></div>
+    <div><label>Номер</label><input name="number" value="{{ document.number|default:'' }}"></div>
+    <div><label>Тип</label><select name="document_type">{% for value,label in document_types %}<option value="{{ value }}" {% if document.document_type == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
+    <div><label>Версия</label><input name="version" value="{{ document.version|default:'1.0' }}" required></div>
+    <div><label>Владелец процесса</label><input name="owner" value="{{ document.owner|default:'' }}" placeholder="Подразделение или ответственное лицо"></div>
+    <div><label>Направление</label><select name="direction"><option value="">—</option>{% for d in directions %}<option value="{{ d.id }}" {% if document.direction_id == d.id %}selected{% endif %}>{{ d.title }}</option>{% endfor %}</select></div>
+    <div><label>Дата утверждения</label><input type="date" name="approved_at" value="{{ document.approved_at|date:'Y-m-d' }}"></div>
+    <div><label>Следующий пересмотр</label><input type="date" name="review_due" value="{{ document.review_due|date:'Y-m-d' }}"></div>
+    <div><label>Отдел / отделение</label><select name="department"><option value="">Общий документ</option>{% for d in departments %}<option value="{{ d.id }}" {% if document.department_id == d.id %}selected{% endif %}>{{ d.name }}</option>{% endfor %}</select></div>
+    <div><label>Статус</label><select name="status"><option value="ACTIVE" {% if not document or document.status == 'ACTIVE' %}selected{% endif %}>Действует</option><option value="ARCHIVED" {% if document.status == 'ARCHIVED' %}selected{% endif %}>Архив</option></select></div>
+    <div><label>Теги</label><input name="tags" value="{{ document.tags|default:'' }}"></div>
+  </div>
+
+  <fieldset class="card" style="margin-top:22px">
+    <legend>Источник документа</legend>
+    <div class="actions">
+      <label><input style="width:auto" type="radio" name="source_type" value="DRIVE" {% if not document or document.external_url %}checked{% endif %}> Ссылка Google Drive</label>
+      <label><input style="width:auto" type="radio" name="source_type" value="UPLOAD" {% if document and not document.external_url %}checked{% endif %}> Загрузить PDF</label>
+    </div>
+    <div id="drive-source"><label>Ссылка Google Drive</label><input type="url" name="external_url" value="{{ document.external_url|default:'' }}" placeholder="https://drive.google.com/file/d/…/view"><small class="muted">В Google Drive включите доступ «Все, у кого есть ссылка — читатель», иначе сотрудники не смогут открыть документ.</small></div>
+    <div id="file-source"><label>PDF-файл</label><input type="file" name="file" accept="application/pdf">{% if document.file %}<small class="muted">Сейчас загружен файл: {{ document.file.name }}. Новый файл заменит источник в карточке.</small>{% endif %}</div>
+  </fieldset>
+
+  <label>Использовать в курсах</label>
+  <div class="checkboxes">{% for course in courses %}<label><input style="width:auto" type="checkbox" name="courses" value="{{ course.id }}" {% if document and course in document.courses.all %}checked{% endif %}> {{ course.title }}</label>{% endfor %}</div>
+  <p><button>Сохранить документ</button></p>
+</form>
+<script>
+(() => {
+  const radios = document.querySelectorAll('input[name="source_type"]');
+  const drive = document.getElementById('drive-source');
+  const file = document.getElementById('file-source');
+  const update = () => {
+    const value = document.querySelector('input[name="source_type"]:checked').value;
+    drive.style.display = value === 'DRIVE' ? 'block' : 'none';
+    file.style.display = value === 'UPLOAD' ? 'block' : 'none';
+  };
+  radios.forEach(radio => radio.addEventListener('change', update));
+  update();
+})();
+</script>
+{% endblock %}

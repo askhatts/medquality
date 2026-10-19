@@ -1,4 +1,4 @@
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 
 from django.contrib.auth.models import User
 from django.db import models
@@ -166,12 +166,29 @@ class InternalDocument(models.Model):
     requirement = models.ForeignKey(QualityRequirement, null=True, blank=True, on_delete=models.SET_NULL, related_name='documents')
     department = models.ForeignKey(Department, null=True, blank=True, on_delete=models.SET_NULL, related_name='internal_documents')
     courses = models.ManyToManyField(Course, blank=True, related_name='internal_documents')
-    file = models.FileField('PDF', upload_to='internal_documents/')
+    file = models.FileField('PDF', upload_to='internal_documents/', blank=True)
+    external_url = models.URLField('Ссылка Google Drive', max_length=500, blank=True)
     tags = models.CharField('Теги', max_length=255, blank=True)
     document_type = models.CharField('Тип документа', max_length=10, choices=TYPES, default='OTHER')
     status = models.CharField('Статус', max_length=10, choices=STATUSES, default='ACTIVE')
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
     def __str__(self): return self.title
+    @property
+    def review_state(self):
+        if self.status == 'ARCHIVED': return 'ARCHIVED'
+        if not self.review_due: return 'NO_DATE'
+        today = timezone.localdate()
+        if self.review_due < today: return 'OVERDUE'
+        if self.review_due <= today + timedelta(days=30): return 'DUE_SOON'
+        return 'CURRENT'
+    @property
+    def review_state_label(self):
+        return {
+            'ARCHIVED': 'Архив', 'NO_DATE': 'Срок не указан',
+            'OVERDUE': 'Пересмотр просрочен', 'DUE_SOON': 'Скоро пересмотр',
+            'CURRENT': 'Срок в норме',
+        }[self.review_state]
     class Meta: ordering = ['title']
 
 class Assignment(models.Model):

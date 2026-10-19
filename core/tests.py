@@ -285,6 +285,75 @@ class LearningPortalTests(TestCase):
         self.client.login(username='employee', password='test-password')
         self.assertEqual(self.client.get(reverse('document_bank')).status_code, 200)
 
+    def test_methodist_can_create_drive_document_and_employee_can_open_it(self):
+        drive_url = 'https://drive.google.com/file/d/test-file-id/view?usp=sharing'
+        self.client.login(username='methodist', password='test-password')
+        response = self.client.post(reverse('document_new'), {
+            'title': 'СОП из Google Drive', 'number': 'СОП-01', 'version': '2.0',
+            'owner': 'Служба качества', 'document_type': 'SOP', 'status': 'ACTIVE',
+            'source_type': 'DRIVE', 'external_url': drive_url,
+            'review_due': (timezone.localdate() + timedelta(days=20)).isoformat(),
+            'courses': [self.course.id],
+        })
+        self.assertRedirects(response, reverse('document_bank'))
+        document = InternalDocument.objects.get(title='СОП из Google Drive')
+        self.assertEqual(document.external_url, drive_url)
+        self.assertFalse(document.file)
+        self.assertTrue(document.courses.filter(pk=self.course.pk).exists())
+
+        self.client.login(username='employee', password='test-password')
+        bank = self.client.get(reverse('document_bank'))
+        self.assertContains(bank, 'Открыть в Google Drive')
+        course = self.client.get(reverse('course', args=[self.course.id]))
+        self.assertContains(course, drive_url)
+
+    def test_document_drive_source_rejects_non_google_url(self):
+        self.client.login(username='methodist', password='test-password')
+        response = self.client.post(reverse('document_new'), {
+            'title': 'Небезопасная ссылка', 'version': '1.0',
+            'document_type': 'OTHER', 'status': 'ACTIVE',
+            'source_type': 'DRIVE', 'external_url': 'https://example.org/document.pdf',
+        }, follow=True)
+        self.assertContains(response, 'Разрешены только HTTPS-ссылки')
+        self.assertFalse(InternalDocument.objects.filter(title='Небезопасная ссылка').exists())
+
+    def test_document_analytics_tracks_owners_and_review_deadlines(self):
+        today = timezone.localdate()
+        InternalDocument.objects.create(
+            title='Просроченный СОП', owner='Служба качества', status='ACTIVE',
+            review_due=today - timedelta(days=1), external_url='https://drive.google.com/file/d/a/view',
+        )
+        InternalDocument.objects.create(
+            title='Скоро пересмотреть', owner='Служба качества', status='ACTIVE',
+            review_due=today + timedelta(days=10), external_url='https://drive.google.com/file/d/b/view',
+        )
+        InternalDocument.objects.create(
+            title='Без срока и владельца', status='ACTIVE',
+            external_url='https://drive.google.com/file/d/c/view',
+        )
+        InternalDocument.objects.create(
+            title='Архивный документ', status='ARCHIVED',
+            external_url='https://drive.google.com/file/d/d/view',
+        )
+        self.client.login(username='employee', password='test-password')
+        page = self.client.get(reverse('document_bank'), {'view': 'analytics'})
+        self.assertEqual(page.context['analytics']['total'], 4)
+        self.assertEqual(page.context['analytics']['active'], 3)
+        self.assertEqual(page.context['analytics']['archived'], 1)
+        self.assertEqual(page.context['analytics']['overdue'], 1)
+        self.assertEqual(page.context['analytics']['due_soon'], 1)
+        self.assertEqual(page.context['analytics']['no_review_date'], 1)
+        self.assertEqual(page.context['analytics']['missing_owner'], 1)
+        self.assertEqual(page.context['analytics']['owners'], 1)
+        self.assertContains(page, 'Контроль пересмотров')
+        self.assertContains(page, 'Служба качества')
+
+        overdue = self.client.get(reverse('document_bank'), {
+            'view': 'documents', 'review': 'OVERDUE',
+        })
+        self.assertContains(overdue, 'Просроченный СОП')
+        self.assertNotContains(overdue, 'Скоро пересмотреть')
+
     def test_bank_document_can_be_linked_without_duplicate_legacy_lesson(self):
         legacy = Lesson.objects.create(course=self.course, title='Старая копия', category='INTERNAL', kind='DOC')
         document = InternalDocument.objects.create(

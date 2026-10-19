@@ -1,8 +1,9 @@
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 import random
 import re
+from urllib.parse import urlparse
 
 from django.conf import settings
 from django.contrib import messages
@@ -14,7 +15,7 @@ from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from django.db import connection, transaction
-from django.db.models import Count, Prefetch
+from django.db.models import Count, Prefetch, Q
 from django.http import FileResponse, Http404, HttpResponse, HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
@@ -58,6 +59,19 @@ def validate_pdf(upload):
         return 'Файл должен иметь тип PDF.'
     if upload.read(5) != b'%PDF-': return 'Содержимое файла не является PDF.'
     upload.seek(0)
+    return None
+
+
+def validate_drive_url(value):
+    if not value:
+        return 'Укажите ссылку Google Drive.'
+    try:
+        parsed = urlparse(value)
+    except ValueError:
+        return 'Некорректная ссылка Google Drive.'
+    hostname = (parsed.hostname or '').lower()
+    if parsed.scheme != 'https' or hostname not in ('drive.google.com', 'docs.google.com'):
+        return 'Разрешены только HTTPS-ссылки drive.google.com или docs.google.com.'
     return None
 
 
@@ -686,11 +700,86 @@ def take_test(request, pk):
 
 @login_required
 def document_bank(request):
-    documents=InternalDocument.objects.select_related('direction','requirement','department').prefetch_related('courses')
-    if request.GET.get('q'): documents=documents.filter(title__icontains=request.GET['q'])
+    base_documents = InternalDocument.objects.select_related(
+        'direction', 'requirement', 'department',
+    ).prefetch_related('courses')
+    all_documents = list(base_documents)
+    documents = base_documents
+    if request.GET.get('q'):
+        query = request.GET['q'].strip()
+        documents = documents.filter(
+            Q(title__icontains=query) | Q(number__icontains=query)
+            | Q(owner__icontains=query) | Q(tags__icontains=query)
+        )
     for key, lookup in [('direction','direction_id'),('requirement','requirement_id'),('department','department_id'),('document_type','document_type'),('status','status')]:
         if request.GET.get(key): documents=documents.filter(**{lookup:request.GET[key]})
-    return render(request,'core/document_bank.html',{'documents':documents,'directions':QualityDirection.objects.all(),'requirements':QualityRequirement.objects.all(),'departments':Department.objects.all(),'document_types':InternalDocument.TYPES,'can_manage':can_manage(request.user)})
+    if request.GET.get('owner'):
+        documents = documents.filter(owner__icontains=request.GET['owner'].strip())
+    review_filter = request.GET.get('review', '')
+    today = timezone.localdate()
+    review_limit = today + timedelta(days=30)
+    if review_filter == 'OVERDUE':
+        documents = documents.filter(status='ACTIVE', review_due__lt=today)
+    elif review_filter == 'DUE_SOON':
+        documents = documents.filter(status='ACTIVE', review_due__range=(today, review_limit))
+    elif review_filter == 'NO_DATE':
+        documents = documents.filter(status='ACTIVE', review_due__isnull=True)
+    elif review_filter == 'CURRENT':
+        documents = documents.filter(status='ACTIVE', review_due__gt=review_limit)
+
+    active_documents = [doc for doc in all_documents if doc.status == 'ACTIVE']
+    analytics = {
+        'total': len(all_documents),
+        'active': len(active_documents),
+        'archived': sum(doc.status == 'ARCHIVED' for doc in all_documents),
+        'overdue': sum(doc.review_state == 'OVERDUE' for doc in active_documents),
+        'due_soon': sum(doc.review_state == 'DUE_SOON' for doc in active_documents),
+        'no_review_date': sum(doc.review_state == 'NO_DATE' for doc in active_documents),
+        'missing_owner': sum(not doc.owner.strip() for doc in active_documents),
+        'owners': len({doc.owner.strip().casefold() for doc in active_documents if doc.owner.strip()}),
+        'drive': sum(bool(doc.external_url) for doc in all_documents),
+        'file': sum(bool(doc.file) for doc in all_documents),
+    }
+    owners = {}
+    for doc in all_documents:
+        owner = doc.owner.strip() or 'Не указан'
+        owner_key = owner.casefold()
+        row = owners.setdefault(owner_key, {
+            'owner': owner, 'total': 0, 'active': 0, 'archived': 0,
+            'overdue': 0, 'due_soon': 0,
+        })
+        row['total'] += 1
+        row['active'] += doc.status == 'ACTIVE'
+        row['archived'] += doc.status == 'ARCHIVED'
+        row['overdue'] += doc.review_state == 'OVERDUE'
+        row['due_soon'] += doc.review_state == 'DUE_SOON'
+    owner_rows = sorted(
+        owners.values(), key=lambda row: (-row['overdue'], -row['due_soon'], row['owner'].casefold()),
+    )
+    review_documents = sorted(
+        [doc for doc in active_documents if doc.review_state in ('OVERDUE', 'DUE_SOON', 'NO_DATE')],
+        key=lambda doc: (doc.review_due is None, doc.review_due or date.max, doc.title.casefold()),
+    )
+    document_view = request.GET.get('view', 'documents')
+    if document_view not in ('documents', 'analytics'):
+        document_view = 'documents'
+    return render(request, 'core/document_bank.html', {
+        'documents': documents.order_by('review_due', 'title'),
+        'analytics': analytics,
+        'owner_rows': owner_rows,
+        'review_documents': review_documents,
+        'document_view': document_view,
+        'directions': QualityDirection.objects.all(),
+        'requirements': QualityRequirement.objects.all(),
+        'departments': Department.objects.all(),
+        'document_types': InternalDocument.TYPES,
+        'can_manage': can_manage(request.user),
+        'selected_direction': request.GET.get('direction', ''),
+        'selected_department': request.GET.get('department', ''),
+        'selected_type': request.GET.get('document_type', ''),
+        'selected_status': request.GET.get('status', ''),
+        'selected_review': review_filter,
+    })
 
 
 @login_required
@@ -699,18 +788,44 @@ def document_form(request, pk=None):
     document=get_object_or_404(InternalDocument,pk=pk) if pk else None
     if request.method=='POST':
         upload=request.FILES.get('file')
+        source_type=request.POST.get('source_type','UPLOAD')
+        external_url=request.POST.get('external_url','').strip()
         if upload:
             error=validate_pdf(upload)
             if error: messages.error(request,error); return redirect('document_edit',pk=pk) if pk else redirect('document_new')
-        if not document and not upload: return HttpResponse('Выберите PDF-файл.',status=400)
+        if source_type == 'DRIVE':
+            error = validate_drive_url(external_url)
+            if error:
+                messages.error(request, error)
+                return redirect('document_edit', pk=pk) if pk else redirect('document_new')
+        elif source_type == 'UPLOAD':
+            if not upload and not (document and document.file):
+                messages.error(request, 'Выберите PDF-файл или источник Google Drive.')
+                return redirect('document_edit', pk=pk) if pk else redirect('document_new')
+        else:
+            return HttpResponse('Некорректный источник документа.', status=400)
+        was_new = document is None
         document=document or InternalDocument()
         for field in ('title','number','version','owner','tags','status','document_type'): setattr(document,field,request.POST.get(field,'').strip())
         document.direction_id=request.POST.get('direction') or None
         if 'requirement' in request.POST: document.requirement_id=request.POST.get('requirement') or None
         document.department_id=request.POST.get('department') or None
         document.approved_at=request.POST.get('approved_at') or None; document.review_due=request.POST.get('review_due') or None
-        if upload: document.file=upload
-        document.save(); document.courses.set(request.POST.getlist('courses')); return redirect('document_bank')
+        if source_type == 'DRIVE':
+            document.external_url = external_url
+            document.file = ''
+        else:
+            document.external_url = ''
+            if upload: document.file=upload
+        document.save()
+        document.courses.set(request.POST.getlist('courses'))
+        AuditLog.objects.create(
+            user=request.user,
+            action='Внутренний документ создан' if was_new else 'Внутренний документ обновлён',
+            object_label=f'{document.number} {document.title}'.strip(),
+        )
+        messages.success(request, 'Документ сохранён в банке.')
+        return redirect('document_bank')
     return render(request,'core/document_form.html',{'document':document,'directions':QualityDirection.objects.all(),'requirements':QualityRequirement.objects.all(),'departments':Department.objects.all(),'courses':Course.objects.all(),'document_types':InternalDocument.TYPES})
 
 
