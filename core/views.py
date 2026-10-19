@@ -231,7 +231,12 @@ def dashboard(request):
         })
         row['total'] += 1
         row[status.lower()] += 1
-        row['assignments'].append({'assignment': assignment, 'status': status})
+        attempts = list(assignment.attempts.all())
+        row['assignments'].append({
+            'assignment': assignment,
+            'status': status,
+            'last_attempt': attempts[-1] if attempts else None,
+        })
 
     if p.role in ('ADMIN', 'METHODIST'):
         for course in Course.objects.filter(active=True).select_related('direction'):
@@ -917,6 +922,30 @@ def department_merge(request, pk):
         request,
         f'Подразделения объединены. Перенесено сотрудников: {staff_count}, документов: {document_count}.',
     )
+    return redirect('departments')
+
+
+@login_required
+def department_delete(request, pk):
+    if not can_manage_people(request.user): return deny(request.user)
+    if request.method != 'POST': return redirect('departments')
+    with transaction.atomic():
+        department = get_object_or_404(Department.objects.select_for_update(), pk=pk)
+        staff_count = Profile.objects.filter(department=department).count()
+        document_count = InternalDocument.objects.filter(department=department).count()
+        if staff_count or document_count or department.head_id:
+            messages.error(
+                request,
+                'Нельзя удалить непустое подразделение. Сначала перенесите сотрудников '
+                'и документы через объединение и снимите руководителя.',
+            )
+            return redirect('departments')
+        department_name = department.name
+        department.delete()
+        AuditLog.objects.create(
+            user=request.user, action='Удалено подразделение', object_label=department_name,
+        )
+    messages.success(request, f'Подразделение «{department_name}» удалено.')
     return redirect('departments')
 
 

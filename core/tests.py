@@ -977,6 +977,21 @@ class LearningPortalTests(TestCase):
         self.assertEqual(page.context['selected_row']['assignments'][0]['assignment'].id, latest.id)
         self.assertContains(page, self.employee.username)
 
+    def test_dashboard_employee_drilldown_shows_latest_score(self):
+        self.assignment.status = 'COMPLETED'
+        self.assignment.completed_at = timezone.now()
+        self.assignment.save(update_fields=['status', 'completed_at'])
+        TestAttempt.objects.create(
+            assignment=self.assignment, number=1, correct_answers=9,
+            score=90, passed=True,
+        )
+        self.client.login(username='methodist', password='test-password')
+        page = self.client.get(reverse('dashboard'), {'course': self.course.id})
+        self.assertContains(page, 'Оценка')
+        self.assertContains(page, '90%')
+        item = page.context['selected_row']['display_assignments'][0]
+        self.assertEqual(item['last_attempt'].score, 90)
+
     def test_dashboard_omits_cancelled_latest_cycle(self):
         self.assignment.status = 'COMPLETED'
         self.assignment.save(update_fields=['status'])
@@ -1225,9 +1240,32 @@ class LearningPortalTests(TestCase):
         self.assertEqual(colleague_profile.department, target)
         self.assertFalse(Department.objects.filter(pk=source.id).exists())
 
+    def test_admin_can_delete_only_empty_department(self):
+        empty = Department.objects.create(name='Пустое подразделение')
+        occupied = self.employee.profile.department
+        self.client.login(username='sysadmin', password='admin-password')
+
+        response = self.client.post(
+            reverse('department_delete', args=[occupied.id]), follow=True,
+        )
+        self.assertContains(response, 'Нельзя удалить непустое подразделение')
+        self.assertTrue(Department.objects.filter(pk=occupied.id).exists())
+
+        response = self.client.post(
+            reverse('department_delete', args=[empty.id]), follow=True,
+        )
+        self.assertContains(response, 'удалено')
+        self.assertFalse(Department.objects.filter(pk=empty.id).exists())
+        self.assertTrue(AuditLog.objects.filter(
+            action='Удалено подразделение', object_label='Пустое подразделение',
+        ).exists())
+
     def test_methodist_cannot_manage_departments(self):
         self.client.login(username='methodist', password='test-password')
         self.assertEqual(self.client.get(reverse('departments')).status_code, 403)
         self.assertEqual(self.client.post(reverse('department_create'), {
             'name': 'Запрещённое подразделение',
         }).status_code, 403)
+        self.assertEqual(self.client.post(reverse('department_delete', args=[
+            self.employee.profile.department_id,
+        ])).status_code, 403)

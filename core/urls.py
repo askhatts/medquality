@@ -35,6 +35,7 @@ urlpatterns = [
     path('departments/new/', views.department_create, name='department_create'),
     path('departments/<int:pk>/edit/', views.department_edit, name='department_edit'),
     path('departments/<int:pk>/merge/', views.department_merge, name='department_merge'),
+    path('departments/<int:pk>/delete/', views.department_delete, name='department_delete'),
     path('employees/new/', views.employee_form, name='employee_new'),
     path('employees/<int:pk>/', views.employee_form, name='employee_edit'),
     path('employees/<int:pk>/reset-password/', views.reset_employee_password, name='employee_reset_password'),
