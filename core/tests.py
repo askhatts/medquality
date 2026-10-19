@@ -10,7 +10,7 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 from openpyxl import load_workbook
-from .models import Assignment, Course, Department, EmployeeType, InternalDocument, Lesson, PasswordResetRequest, Profile, QualityDirection, Question, Test, TestAttempt
+from .models import Assignment, AuditLog, Course, Department, EmployeeType, InternalDocument, Lesson, PasswordResetRequest, Profile, QualityDirection, Question, Test, TestAttempt
 from .training_content import BLUE_CODE_ADULT_QUESTIONS
 
 class LearningPortalTests(TestCase):
@@ -109,6 +109,69 @@ class LearningPortalTests(TestCase):
         cycles = Assignment.objects.filter(user=self.employee, course=self.course)
         self.assertEqual(cycles.count(), 2)
         self.assertEqual(cycles.filter(status='COMPLETED').count(), 1)
+
+    def test_extend_incomplete_assignments_preserves_results_and_reopens_exhausted_cycle(self):
+        self.assignment.status = 'FAILED'
+        self.assignment.attempts_allowed = 1
+        self.assignment.save(update_fields=['status', 'attempts_allowed'])
+        old_attempt = TestAttempt.objects.create(
+            assignment=self.assignment, number=1, correct_answers=0,
+            score=40, passed=False,
+        )
+        completed = Assignment.objects.create(
+            user=self.admin, course=self.course, test_version=self.test,
+            due_date=date(2026, 10, 1), due_time='18:00', status='COMPLETED',
+            completed_at=timezone.now(), passing_score=80, attempts_allowed=2,
+        )
+
+        call_command(
+            'extend_incomplete_assignments', due_date='2026-10-23',
+            due_time='23:59', actor='sysadmin',
+        )
+        call_command(
+            'extend_incomplete_assignments', due_date='2026-10-23',
+            due_time='23:59', actor='sysadmin',
+        )
+
+        self.assignment.refresh_from_db()
+        completed.refresh_from_db()
+        self.assertEqual(self.assignment.status, 'REASSIGNED')
+        self.assertTrue(TestAttempt.objects.filter(pk=old_attempt.pk, score=40).exists())
+        replacement = Assignment.objects.get(
+            user=self.employee, course=self.course, status='ASSIGNED',
+        )
+        self.assertEqual(replacement.due_date, date(2026, 10, 23))
+        self.assertEqual(replacement.due_time.strftime('%H:%M'), '23:59')
+        self.assertEqual(replacement.attempts_allowed, 1)
+        self.assertEqual(replacement.attempts.count(), 0)
+        self.assertEqual(completed.status, 'COMPLETED')
+        self.assertEqual(completed.due_date, date(2026, 10, 1))
+        self.assertEqual(
+            Assignment.objects.filter(user=self.employee, course=self.course).count(), 2,
+        )
+        self.assertTrue(AuditLog.objects.filter(action='Массово продлены назначения').exists())
+
+    def test_extend_incomplete_assignments_updates_open_cycle_without_losing_attempt(self):
+        self.assignment.status = 'IN_PROGRESS'
+        self.assignment.attempts_allowed = 2
+        self.assignment.save(update_fields=['status', 'attempts_allowed'])
+        attempt = TestAttempt.objects.create(
+            assignment=self.assignment, number=1, correct_answers=0,
+            score=50, passed=False,
+        )
+
+        call_command(
+            'extend_incomplete_assignments', due_date='2026-10-23', due_time='23:59',
+        )
+
+        self.assignment.refresh_from_db()
+        self.assertEqual(self.assignment.status, 'IN_PROGRESS')
+        self.assertEqual(self.assignment.due_date, date(2026, 10, 23))
+        self.assertEqual(self.assignment.due_time.strftime('%H:%M'), '23:59')
+        self.assertTrue(TestAttempt.objects.filter(pk=attempt.pk, score=50).exists())
+        self.assertEqual(
+            Assignment.objects.filter(user=self.employee, course=self.course).count(), 1,
+        )
 
     def test_report_separates_course_dates_and_numeric_result(self):
         self.assignment.attempts_allowed = 2
