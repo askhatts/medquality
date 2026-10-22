@@ -49,8 +49,21 @@ def include(path):
 
 
 def quality_uses_postgres():
+    containers = subprocess.run(
+        [
+            'docker', 'ps',
+            '--filter', 'label=com.docker.compose.project=quality',
+            '--filter', 'label=com.docker.compose.service=quality',
+            '--format', '{{.ID}}',
+        ],
+        capture_output=True, text=True, check=True,
+    ).stdout.splitlines()
+    if len(containers) != 1:
+        raise RuntimeError(
+            f'Expected one running quality application container, found {len(containers)}'
+        )
     result = subprocess.run(
-        ['docker', 'inspect', '--format', '{{range .Config.Env}}{{println .}}{{end}}', 'quality_app'],
+        ['docker', 'inspect', '--format', '{{range .Config.Env}}{{println .}}{{end}}', containers[0]],
         capture_output=True, text=True, check=True,
     )
     values = dict(line.split('=', 1) for line in result.stdout.splitlines() if '=' in line)
