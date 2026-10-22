@@ -622,6 +622,46 @@ class LearningPortalTests(TestCase):
         self.assertNotIn('у детей', combined_text)
         self.assertNotIn('ребен', combined_text)
 
+    def test_mcbp5_and_safety_codes_are_loaded_and_assigned_idempotently(self):
+        call_command(
+            'load_mcbp5_safety_codes', assign=True,
+            due_date='2026-11-20', due_time='23:59',
+        )
+        call_command(
+            'load_mcbp5_safety_codes', assign=True,
+            due_date='2026-11-20', due_time='23:59',
+        )
+        titles = [
+            'МЦБП 5 — Гигиена рук и профилактика инфекций',
+            'Красный код: пожарная безопасность и эвакуация',
+            'Жёлтый код: действия при разливе опасных веществ',
+            'Чёрный код: угроза взрыва и подозрительные предметы',
+        ]
+        courses = list(Course.objects.filter(title__in=titles).order_by('title'))
+        self.assertEqual(len(courses), 4)
+        self.assertEqual(
+            Course.objects.get(title=titles[0]).direction.title,
+            'Инфекционный контроль',
+        )
+        self.assertTrue(all(
+            course.direction.title == 'Коды безопасности и экстренное реагирование'
+            for course in courses if course.title != titles[0]
+        ))
+        self.assertEqual(Course.objects.get(title=titles[0]).lessons.count(), 3)
+        for course in courses:
+            self.assertTrue(course.active)
+            self.assertTrue(all(lesson.drive_embed_url for lesson in course.lessons.all()))
+            test = course.tests.get(is_current=True)
+            self.assertEqual(test.status, 'PUBLISHED')
+            self.assertEqual(test.time_limit_minutes, 10)
+            self.assertEqual(test.questions.count(), 10)
+        assignments = Assignment.objects.filter(course__in=courses)
+        self.assertEqual(assignments.count(), 8)
+        self.assertFalse(assignments.filter(user=self.admin).exists())
+        self.assertFalse(assignments.exclude(due_date=date(2026, 11, 20)).exists())
+        self.assertFalse(assignments.exclude(due_time='23:59').exists())
+        self.assertFalse(assignments.exclude(passing_score=80, attempts_allowed=2).exists())
+
     def test_replace_blue_code_test_preserves_history_and_updates_only_incomplete_cycles(self):
         call_command('load_safety_communication_courses')
         course = Course.objects.get(title='Синий код: базовая реанимация и действия команды')
