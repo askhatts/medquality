@@ -1372,6 +1372,64 @@ def report_data(request):
         row['average'] = round(sum(scores) / len(scores), 1) if scores else None
         matrix_rows.append(row)
 
+    heatmap_departments = {}
+    for entry in current_entries:
+        department = entry['profile'].department
+        department_key = department.id if department else None
+        department_row = heatmap_departments.setdefault(department_key, {
+            'department': department,
+            'department_name': department.name if department else 'Без подразделения',
+            'courses': {},
+        })
+        course_stats = department_row['courses'].setdefault(
+            entry['course'].id, {'total': 0, 'completed': 0},
+        )
+        course_stats['total'] += 1
+        course_stats['completed'] += int(entry['status'] == 'COMPLETED')
+
+    department_heatmap = []
+    for row in sorted(
+        heatmap_departments.values(),
+        key=lambda item: item['department_name'].casefold(),
+    ):
+        cells = []
+        overall_total = 0
+        overall_completed = 0
+        for course in matrix_courses:
+            stats = row['courses'].get(course.id)
+            if not stats:
+                cells.append(None)
+                continue
+            rate = round(stats['completed'] * 100 / stats['total'])
+            if rate == 100:
+                level = 'complete'
+            elif rate >= 75:
+                level = 'high'
+            elif rate >= 50:
+                level = 'medium'
+            elif rate >= 25:
+                level = 'low'
+            else:
+                level = 'critical'
+            cells.append({**stats, 'rate': rate, 'level': level})
+            overall_total += stats['total']
+            overall_completed += stats['completed']
+        row['cells'] = cells
+        row['total'] = overall_total
+        row['completed'] = overall_completed
+        row['rate'] = round(overall_completed * 100 / overall_total) if overall_total else None
+        if row['rate'] == 100:
+            row['level'] = 'complete'
+        elif row['rate'] is not None and row['rate'] >= 75:
+            row['level'] = 'high'
+        elif row['rate'] is not None and row['rate'] >= 50:
+            row['level'] = 'medium'
+        elif row['rate'] is not None and row['rate'] >= 25:
+            row['level'] = 'low'
+        else:
+            row['level'] = 'critical'
+        department_heatmap.append(row)
+
     analytics = []
     for course in matrix_courses:
         rows = [entry for entry in current_entries if entry['course'].id == course.id]
@@ -1409,6 +1467,7 @@ def report_data(request):
         'history_rows': history_rows,
         'matrix_rows': matrix_rows,
         'matrix_courses': matrix_courses,
+        'department_heatmap': department_heatmap,
         'analytics': analytics,
         'selected_course': selected_course,
         'selected_stats': selected_stats,

@@ -253,6 +253,49 @@ class LearningPortalTests(TestCase):
         self.assertEqual([row['score'] for row in page.context['course_rows']], [90, 80])
         self.assertEqual(page.context['selected_stats']['average'], 85.0)
 
+    def test_matrix_report_contains_department_completion_heatmap(self):
+        self.assignment.status = 'COMPLETED'
+        self.assignment.completed_at = timezone.now()
+        self.assignment.save(update_fields=['status', 'completed_at'])
+        TestAttempt.objects.create(
+            assignment=self.assignment, number=1, correct_answers=1,
+            score=100, passed=True,
+        )
+        methodist = User.objects.get(username='methodist')
+        Assignment.objects.create(
+            user=methodist, course=self.course, test_version=self.test,
+            due_date=timezone.localdate() + timedelta(days=2),
+            passing_score=80, attempts_allowed=2, status='ASSIGNED',
+        )
+        second_department = Department.objects.create(name='Второе отделение')
+        second_user = User.objects.create_user('second_employee', password='test-password')
+        Profile.objects.create(
+            user=second_user, role='EMPLOYEE', department=second_department,
+            employee_type=self.employee.profile.employee_type, position='Врач',
+        )
+        second_assignment = Assignment.objects.create(
+            user=second_user, course=self.course, test_version=self.test,
+            due_date=timezone.localdate() + timedelta(days=2),
+            passing_score=80, attempts_allowed=2, status='COMPLETED',
+            completed_at=timezone.now(),
+        )
+        TestAttempt.objects.create(
+            assignment=second_assignment, number=1, correct_answers=1,
+            score=100, passed=True,
+        )
+
+        self.client.login(username='methodist', password='test-password')
+        page = self.client.get(reverse('reports'), {'view': 'matrix'})
+        heatmap = page.context['department_heatmap']
+        by_name = {row['department_name']: row for row in heatmap}
+        self.assertEqual(by_name['Тестовое отделение']['cells'][0]['rate'], 50)
+        self.assertEqual(by_name['Тестовое отделение']['cells'][0]['completed'], 1)
+        self.assertEqual(by_name['Тестовое отделение']['cells'][0]['total'], 2)
+        self.assertEqual(by_name['Второе отделение']['cells'][0]['rate'], 100)
+        self.assertContains(page, 'Процент завершения по подразделениям')
+        self.assertContains(page, '1 из 2')
+        self.assertContains(page, 'heatmap-medium')
+
     def test_ten_reassignments_create_ten_distinct_history_cycles(self):
         self.assignment.delete()
         self.client.login(username='methodist', password='test-password')
@@ -621,6 +664,26 @@ class LearningPortalTests(TestCase):
         self.assertNotIn('младен', combined_text)
         self.assertNotIn('у детей', combined_text)
         self.assertNotIn('ребен', combined_text)
+
+    def test_patient_transition_courses_are_idempotent_and_unassigned(self):
+        call_command('load_patient_transition_courses')
+        call_command('load_patient_transition_courses')
+        titles = [
+            'Правила выписки и перевода пациентов',
+            'Лечение и уход за пациентами уязвимых групп',
+        ]
+        courses = list(Course.objects.filter(title__in=titles).order_by('title'))
+        self.assertEqual(len(courses), 2)
+        for course in courses:
+            self.assertEqual(course.direction.title, 'Безопасность пациента')
+            self.assertTrue(course.active)
+            self.assertEqual(course.lessons.count(), 2)
+            self.assertTrue(all(lesson.drive_embed_url for lesson in course.lessons.all()))
+            test = course.tests.get(is_current=True)
+            self.assertEqual(test.status, 'PUBLISHED')
+            self.assertEqual(test.time_limit_minutes, 10)
+            self.assertEqual(test.questions.count(), 10)
+            self.assertFalse(Assignment.objects.filter(course=course).exists())
 
     def test_mcbp5_and_safety_codes_are_loaded_and_assigned_idempotently(self):
         call_command(

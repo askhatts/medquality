@@ -56,7 +56,17 @@
   {% else %}<div class="card"><p>Назначений по выбранным фильтрам пока нет.</p></div>{% endif %}
 
 {% elif report_view == 'matrix' %}
-  <div class="card"><h2>Матрица обучения</h2><p class="muted">Одна строка — один сотрудник, один столбец — один курс. Число означает последнюю оценку актуального назначения.</p></div>
+  <div class="card"><h2>Матрица обучения</h2><p class="muted">Тепловая карта показывает охват по подразделениям, а подробная матрица ниже — последнюю оценку актуального назначения каждого сотрудника.</p></div>
+  <div class="card heatmap-card">
+    <div class="heatmap-heading"><div><h2>Процент завершения по подразделениям</h2><p class="muted">Доля успешно завершивших курс среди сотрудников, которым он назначен. Учитываются выбранные выше фильтры.</p></div>
+      <div class="heatmap-legend" aria-label="Легенда тепловой карты"><span><i class="heatmap-critical"></i>0–24%</span><span><i class="heatmap-low"></i>25–49%</span><span><i class="heatmap-medium"></i>50–74%</span><span><i class="heatmap-high"></i>75–99%</span><span><i class="heatmap-complete"></i>100%</span></div>
+    </div>
+    <div class="heatmap-scroll"><table class="heatmap-table"><thead><tr><th>Подразделение</th>{% for course in matrix_courses %}<th title="{{ course.title }}">{{ course.title }}</th>{% endfor %}<th>По всем курсам</th></tr></thead><tbody>{% for row in department_heatmap %}<tr>
+      <th scope="row">{{ row.department_name }}</th>
+      {% for cell in row.cells %}{% if cell %}<td class="heatmap-cell heatmap-{{ cell.level }}" title="Завершили {{ cell.completed }} из {{ cell.total }}"><strong>{{ cell.rate }}%</strong><small>{{ cell.completed }} из {{ cell.total }}</small></td>{% else %}<td class="heatmap-cell heatmap-empty" title="Курс не назначен">—</td>{% endif %}{% endfor %}
+      <td class="heatmap-cell heatmap-{{ row.level }}" title="Завершили {{ row.completed }} из {{ row.total }} по всем курсам"><strong>{{ row.rate }}%</strong><small>{{ row.completed }} из {{ row.total }}</small></td>
+    </tr>{% empty %}<tr><td colspan="20">По выбранным фильтрам данных для тепловой карты нет.</td></tr>{% endfor %}</tbody></table></div>
+  </div>
   <div class="card" style="overflow-x:auto"><table><thead><tr><th>Сотрудник</th><th>Отделение</th>{% for course in matrix_courses %}<th>{{ course.title }}</th>{% endfor %}<th>Средний балл</th></tr></thead><tbody>{% for row in matrix_rows %}<tr>
     <td><b>{{ row.user.get_full_name|default:row.user.username }}</b><br><small>{{ row.user.username }} · {{ row.profile.employee_type|default:'—' }}</small></td><td>{{ row.profile.department|default:'—' }}</td>
     {% for cell in row.cells %}<td>{% if cell %}{% if cell.score is not None %}<b>{{ cell.score }}%</b><br>{% endif %}<small>{{ cell.status_label }}</small>{% else %}—{% endif %}</td>{% endfor %}<td>{% if row.average is not None %}<b>{{ row.average }}%</b>{% else %}—{% endif %}</td>
