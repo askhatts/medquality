@@ -192,7 +192,9 @@ def visible_assignments(user):
 
 
 def filtered_assignments(request, include_cancelled=False):
-    assignments = visible_assignments(request.user)
+    # Deactivated employees are kept only as an audit archive. They must not
+    # affect current reports, exports, averages, or department completion rates.
+    assignments = visible_assignments(request.user).filter(user__is_active=True)
     if not include_cancelled:
         assignments = assignments.exclude(status='CANCELLED')
     for field, lookup in [('direction','course__direction_id'),('requirement','course__quality_requirements__id'),('course','course_id'),('department','user__profile__department_id'),('employee_type','user__profile__employee_type_id'),('employee','user_id')]:
@@ -837,7 +839,19 @@ def document_form(request, pk=None):
 @login_required
 def employees(request):
     if not can_manage_people(request.user): return deny(request.user)
-    return render(request, 'core/employees.html', {'employees': Profile.objects.select_related('user','department','employee_type').order_by('user__last_name'), 'departments': Department.objects.all(), 'types': EmployeeType.objects.all()})
+    show_inactive = request.GET.get('status') == 'inactive'
+    employee_profiles = Profile.objects.select_related(
+        'user', 'department', 'employee_type',
+    ).filter(user__is_active=not show_inactive).order_by(
+        'user__last_name', 'user__first_name', 'user__username',
+    )
+    return render(request, 'core/employees.html', {
+        'employees': employee_profiles,
+        'show_inactive': show_inactive,
+        'inactive_count': Profile.objects.filter(user__is_active=False).count(),
+        'departments': Department.objects.all(),
+        'types': EmployeeType.objects.all(),
+    })
 
 
 @login_required
@@ -962,7 +976,73 @@ def employee_form(request, pk=None):
         AuditLog.objects.create(user=request.user, action='Профиль сотрудника сохранён', object_label=user.username)
         messages.success(request, 'Профиль сотрудника сохранён.')
         return redirect('employees')
-    return render(request,'core/employee_form.html',{'employee':target,'departments':Department.objects.all(),'types':EmployeeType.objects.all(),'roles':Profile.ROLES})
+    return render(request,'core/employee_form.html',{
+        'employee': target,
+        'has_training_history': bool(target and target.user.assignments.exists()),
+        'departments': Department.objects.all(),
+        'types': EmployeeType.objects.all(),
+        'roles': Profile.ROLES,
+    })
+
+
+@login_required
+def employee_delete(request, pk):
+    if not can_manage_people(request.user): return deny(request.user)
+    target = get_object_or_404(Profile.objects.select_related('user'), pk=pk)
+    if request.method != 'POST': return redirect('employee_edit', pk=pk)
+    if target.user_id == request.user.id:
+        messages.error(request, 'Нельзя удалить собственную учётную запись.')
+        return redirect('employee_edit', pk=pk)
+    if target.user.username == 'sysadmin':
+        messages.error(request, 'Системную учётную запись sysadmin удалить нельзя.')
+        return redirect('employee_edit', pk=pk)
+
+    username = target.user.username
+    display_name = target.user.get_full_name().strip() or username
+    with transaction.atomic():
+        target = Profile.objects.select_for_update().select_related('user').get(pk=pk)
+        if Assignment.objects.filter(user=target.user).exists():
+            target.user.is_active = False
+            target.user.save(update_fields=['is_active'])
+            PasswordResetRequest.objects.filter(
+                user=target.user, status='PENDING',
+            ).update(
+                status='DISMISSED', resolved_at=timezone.now(), resolved_by=request.user,
+            )
+            AuditLog.objects.create(
+                user=request.user,
+                action='Отключена учётная запись сотрудника',
+                object_label=f'{display_name} ({username})',
+            )
+            messages.success(
+                request,
+                'Учётная запись отключена. История обучения и результаты сохранены.',
+            )
+        else:
+            target.user.delete()
+            AuditLog.objects.create(
+                user=request.user,
+                action='Удалён сотрудник',
+                object_label=f'{display_name} ({username})',
+            )
+            messages.success(request, 'Сотрудник и его учётная запись удалены.')
+    return redirect('employees')
+
+
+@login_required
+def employee_restore(request, pk):
+    if not can_manage_people(request.user): return deny(request.user)
+    target = get_object_or_404(Profile.objects.select_related('user'), pk=pk)
+    if request.method != 'POST': return redirect('employees')
+    target.user.is_active = True
+    target.user.save(update_fields=['is_active'])
+    AuditLog.objects.create(
+        user=request.user,
+        action='Восстановлена учётная запись сотрудника',
+        object_label=target.user.username,
+    )
+    messages.success(request, 'Учётная запись сотрудника восстановлена.')
+    return redirect('employees')
 
 
 @login_required
@@ -1486,7 +1566,7 @@ def reports(request):
     base_query = request.GET.copy()
     for key in ('view', 'sort', 'order'):
         base_query.pop(key, None)
-    employees = Profile.objects.select_related('user')
+    employees = Profile.objects.select_related('user').filter(user__is_active=True)
     if is_head(request.user):
         employees = employees.filter(department=profile(request.user).department)
     data.update({

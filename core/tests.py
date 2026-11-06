@@ -1372,3 +1372,63 @@ class LearningPortalTests(TestCase):
         self.assertEqual(self.client.post(reverse('department_delete', args=[
             self.employee.profile.department_id,
         ])).status_code, 403)
+
+    def test_admin_can_delete_employee_without_training_history(self):
+        disposable = User.objects.create_user('disposable', password='test-password')
+        disposable_profile = Profile.objects.create(
+            user=disposable, role='EMPLOYEE',
+            department=self.employee.profile.department,
+            employee_type=self.employee.profile.employee_type, position='Стажёр',
+        )
+        self.client.login(username='sysadmin', password='admin-password')
+        response = self.client.post(
+            reverse('employee_delete', args=[disposable_profile.id]), follow=True,
+        )
+        self.assertContains(response, 'Сотрудник и его учётная запись удалены')
+        self.assertFalse(User.objects.filter(username='disposable').exists())
+        self.assertTrue(AuditLog.objects.filter(
+            action='Удалён сотрудник', object_label__contains='disposable',
+        ).exists())
+
+    def test_employee_with_training_history_is_deactivated_and_hidden_from_reports(self):
+        employee_profile_id = self.employee.profile.id
+        self.client.login(username='sysadmin', password='admin-password')
+        response = self.client.post(
+            reverse('employee_delete', args=[employee_profile_id]), follow=True,
+        )
+        self.assertContains(response, 'История обучения и результаты сохранены')
+        self.employee.refresh_from_db()
+        self.assertFalse(self.employee.is_active)
+        self.assertTrue(Profile.objects.filter(pk=employee_profile_id).exists())
+        self.assertTrue(Assignment.objects.filter(pk=self.assignment.pk).exists())
+
+        report = self.client.get(reverse('reports'))
+        self.assertEqual(report.context['selected_stats']['total'], 0)
+        self.assertEqual(report.context['history_rows'], [])
+        self.assertFalse(report.context['employees'].filter(user=self.employee).exists())
+        inactive = self.client.get(reverse('employees'), {'status': 'inactive'})
+        self.assertContains(inactive, self.employee.username)
+
+        response = self.client.post(
+            reverse('employee_restore', args=[employee_profile_id]), follow=True,
+        )
+        self.assertContains(response, 'Учётная запись сотрудника восстановлена')
+        self.employee.refresh_from_db()
+        self.assertTrue(self.employee.is_active)
+
+    def test_employee_deletion_protects_admin_and_is_admin_only(self):
+        self.client.login(username='sysadmin', password='admin-password')
+        response = self.client.post(
+            reverse('employee_delete', args=[self.admin.profile.id]), follow=True,
+        )
+        self.assertContains(response, 'Нельзя удалить собственную учётную запись')
+        self.assertTrue(User.objects.filter(pk=self.admin.pk, is_active=True).exists())
+
+        self.client.logout()
+        self.client.login(username='methodist', password='test-password')
+        response = self.client.post(
+            reverse('employee_delete', args=[self.employee.profile.id]),
+        )
+        self.assertEqual(response.status_code, 403)
+        self.employee.refresh_from_db()
+        self.assertTrue(self.employee.is_active)

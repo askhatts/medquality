@@ -1,1 +1,39 @@
-{% extends 'core/base.html' %}{% block content %}<div class="topline"><div><h1>Сотрудники</h1><p class="muted">Учётные записи, отделения и категории сотрудников.</p></div><div class="actions"><a class="btn secondary" href="{% url 'departments' %}">Подразделения</a><a class="btn secondary" href="{% url 'password_requests' %}">Запросы пароля{% if password_request_count %}: {{ password_request_count }}{% endif %}</a><a class="btn" href="{% url 'employee_new' %}">Добавить сотрудника</a></div></div><div class="card"><table><tr><th>Сотрудник</th><th>Роль</th><th>Категория</th><th>Отдел / отделение</th><th>Должность</th><th></th></tr>{% for p in employees %}<tr><td>{{ p.user.get_full_name }}<br><small class="muted">{{ p.user.username }}</small></td><td>{{ p.get_role_display }}</td><td>{{ p.employee_type|default:'—' }}</td><td>{{ p.department|default:'—' }}</td><td>{{ p.position|default:'—' }}</td><td><a href="{% url 'employee_edit' p.id %}">Изменить</a></td></tr>{% endfor %}</table></div>{% endblock %}
+{% extends 'core/base.html' %}
+{% block content %}
+<div class="topline">
+  <div>
+    <h1>{% if show_inactive %}Отключённые сотрудники{% else %}Сотрудники{% endif %}</h1>
+    <p class="muted">Учётные записи, отделения и категории сотрудников.</p>
+  </div>
+  <div class="actions">
+    {% if show_inactive %}<a class="btn secondary" href="{% url 'employees' %}">Активные сотрудники</a>{% elif inactive_count %}<a class="btn secondary" href="?status=inactive">Отключённые: {{ inactive_count }}</a>{% endif %}
+    <a class="btn secondary" href="{% url 'departments' %}">Подразделения</a>
+    <a class="btn secondary" href="{% url 'password_requests' %}">Запросы пароля{% if password_request_count %}: {{ password_request_count }}{% endif %}</a>
+    <a class="btn" href="{% url 'employee_new' %}">Добавить сотрудника</a>
+  </div>
+</div>
+<div class="card">
+  <table>
+    <tr><th>Сотрудник</th><th>Роль</th><th>Категория</th><th>Отдел / отделение</th><th>Должность</th><th></th></tr>
+    {% for p in employees %}
+    <tr>
+      <td>{{ p.user.get_full_name|default:p.user.username }}<br><small class="muted">{{ p.user.username }}</small></td>
+      <td>{{ p.get_role_display }}</td>
+      <td>{{ p.employee_type|default:'—' }}</td>
+      <td>{{ p.department|default:'—' }}</td>
+      <td>{{ p.position|default:'—' }}</td>
+      <td>
+        <div class="actions">
+          <a class="btn secondary" href="{% url 'employee_edit' p.id %}">Изменить</a>
+          {% if show_inactive %}
+          <form method="post" action="{% url 'employee_restore' p.id %}">{% csrf_token %}<button>Восстановить</button></form>
+          {% elif p.user_id != user.id and p.user.username != 'sysadmin' %}
+          <form method="post" action="{% url 'employee_delete' p.id %}" onsubmit="return confirm('Удалить сотрудника «{{ p.user.get_full_name|default:p.user.username|escapejs }}»? Если есть история обучения, учётная запись будет отключена, а результаты сохранятся.');">{% csrf_token %}<button class="btn danger">Удалить</button></form>
+          {% endif %}
+        </div>
+      </td>
+    </tr>
+    {% empty %}<tr><td colspan="6" class="muted">Сотрудников в этом списке нет.</td></tr>{% endfor %}
+  </table>
+</div>
+{% endblock %}
