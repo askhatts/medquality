@@ -26,6 +26,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from .models import (Assignment, AuditLog, Course, Department, EmployeeType,
                      InternalDocument, Lesson, PasswordResetRequest, Profile, QualityDirection,
                      QualityRequirement, Question, Test, TestAttempt)
+from .assignment_queries import pending_course_assignments
 
 
 MAX_UPLOAD_SIZE = 15 * 1024 * 1024
@@ -315,21 +316,20 @@ def courses(request):
     # One card per course: only the newest assignment cycle defines whether
     # the course is currently assigned. Cancelled/reassigned cycles and old
     # records must not make a course reappear in the employee's list.
-    latest_by_course = {}
     latest_completed_by_course = {}
     assignments = Assignment.objects.filter(
         user=request.user,
         course__active=True,
     ).select_related('course', 'course__direction', 'test_version').prefetch_related('attempts')
     for assignment in assignments:
-        latest_by_course.setdefault(assignment.course_id, assignment)
         if assignment.status == 'COMPLETED' and assignment.test_version_id:
             latest_completed_by_course.setdefault(assignment.course_id, assignment)
 
     active_assignments = []
-    for assignment in latest_by_course.values():
-        if assignment.status in ('CANCELLED', 'REASSIGNED', 'COMPLETED') or not assignment.test_version_id:
-            continue
+    current = pending_course_assignments(request.user).select_related(
+        'course', 'course__direction', 'test_version',
+    ).prefetch_related('attempts')
+    for assignment in current:
         attempts = list(assignment.attempts.all())
         assignment.latest_attempt = attempts[-1] if attempts else None
         assignment.display_status = 'Просрочено' if assignment.is_overdue else assignment.get_status_display()

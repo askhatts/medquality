@@ -1,6 +1,7 @@
 from django.conf import settings
 
-from .models import Assignment, PasswordResetRequest
+from .assignment_queries import pending_course_assignments
+from .models import PasswordResetRequest
 
 def portal(request):
     if not request.user.is_authenticated:
@@ -14,11 +15,7 @@ def portal(request):
     if user_profile and user_profile.role == 'ADMIN':
         password_request_count = PasswordResetRequest.objects.filter(status='PENDING').count()
     return {
-        'notification_count': Assignment.objects.filter(
-            user=request.user,
-            status__in=['ASSIGNED', 'IN_PROGRESS', 'OVERDUE', 'FAILED'],
-            test_version__isnull=False,
-        ).count(),
+        'notification_count': pending_course_assignments(request.user).count(),
         'password_request_count': password_request_count,
         'session_idle_timeout_ms': settings.SESSION_COOKIE_AGE * 1000,
     }

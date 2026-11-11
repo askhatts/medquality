@@ -549,6 +549,53 @@ class LearningPortalTests(TestCase):
         self.assertNotContains(response, self.course.title)
         self.assertContains(response, 'Курсов к прохождению пока нет')
 
+    def test_navigation_count_matches_current_courses_not_old_cycles(self):
+        # A stale incomplete cycle must not count after a newer terminal cycle.
+        self.client.force_login(self.employee)
+        for terminal in ('COMPLETED', 'CANCELLED', 'REASSIGNED'):
+            with self.subTest(terminal=terminal):
+                latest = Assignment.objects.create(
+                    user=self.employee, course=self.course, test_version=self.test,
+                    due_date=timezone.localdate() + timedelta(days=3), status=terminal,
+                )
+                response = self.client.get(reverse('courses'))
+                self.assertEqual(response.context['notification_count'], 0)
+                self.assertEqual(response.context['active_count'], 0)
+                self.assertEqual(response.context['completed_count'], int(terminal == 'COMPLETED'))
+                latest.delete()
+        self.assertEqual(Assignment.objects.get(pk=self.assignment.pk).status, 'ASSIGNED')
+
+    def test_navigation_count_ignores_inactive_courses_and_latest_without_test(self):
+        self.client.force_login(self.employee)
+        self.course.active = False
+        self.course.save(update_fields=['active'])
+        response = self.client.get(reverse('courses'))
+        self.assertEqual(response.context['notification_count'], 0)
+        self.assertEqual(response.context['active_count'], 0)
+        self.course.active = True
+        self.course.save(update_fields=['active'])
+        Assignment.objects.create(
+            user=self.employee, course=self.course,
+            due_date=timezone.localdate() + timedelta(days=3),
+        )
+        response = self.client.get(reverse('courses'))
+        self.assertEqual(response.context['notification_count'], 0)
+        self.assertEqual(response.context['active_count'], 0)
+
+    def test_navigation_count_includes_each_current_incomplete_status_once(self):
+        self.client.force_login(self.employee)
+        for status in ('ASSIGNED', 'IN_PROGRESS', 'OVERDUE', 'FAILED'):
+            with self.subTest(status=status):
+                Assignment.objects.create(
+                    user=self.employee, course=self.course, test_version=self.test,
+                    due_date=timezone.localdate() + timedelta(days=3), status=status,
+                )
+                response = self.client.get(reverse('courses'))
+                self.assertEqual(response.context['notification_count'], 1)
+                self.assertEqual(response.context['active_count'], 1)
+        # The counter is present on other pages, not only the courses page.
+        self.assertEqual(self.client.get(reverse('directions')).context['notification_count'], 1)
+
     def test_google_drive_material_is_embedded_and_opens_in_new_tab(self):
         lesson = Lesson.objects.create(
             course=self.course, title='Материал Drive', kind='VIDEO', order=1,
