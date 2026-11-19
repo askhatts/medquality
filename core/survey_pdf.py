@@ -93,7 +93,7 @@ def build_survey_pdf(campaign, data):
         ], [160, 75, 270]), Spacer(1, 12), p('Распределение основных показателей, %', 'Heading2'), bar_chart([
             ('Благоприятная среда', data['favourable']), ('Признаки выгорания', data['burnout']), ('Напряжение из-за МИС', data['mis_stress']),
         ], 100), Spacer(1, 10), p('Средние баллы по основным вопросам', 'Heading2'), bar_chart([(f'Вопрос {q["number"]}', q['mean']) for q in data['questions']])]
-        story += [p('Показатели по группам', 'Heading2'), table([
+        story += [p('Показатели по категориям сотрудников', 'Heading2'), table([
             ['Группа', 'Анкет', 'Общий / 50', 'Среда / 25', 'Темп / 25', 'Выгорание'],
             *[[f'{g["dimension"]}: {g["label"]}', g['count'], g.get('total', 'Скрыто') if g['visible'] else 'Скрыто', g.get('support', '—') if g['visible'] else '—', g.get('pace', '—') if g['visible'] else '—', f'{g["burnout"]}%' if g['visible'] else '—'] for g in data['groups']],
         ], [185, 40, 70, 70, 70, 70])]

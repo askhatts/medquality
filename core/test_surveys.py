@@ -135,11 +135,39 @@ class AnonymousSurveyTests(TestCase):
 
     def test_small_groups_and_small_complements_are_suppressed(self):
         for index in range(6):
-            self.response(department='clinic' if index < 5 else 'surgery')
+            self.response(category='doctor' if index < 5 else 'nurse')
         data = survey_analytics(self.campaign)
         self.assertTrue(data['visible'])
-        department_groups = [g for g in data['groups'] if g['dimension'] == 'Подразделение']
-        self.assertFalse(any(g['visible'] for g in department_groups))
+        self.assertEqual(len(data['groups']), 2)
+        self.assertFalse(any(g['visible'] for g in data['groups']))
+
+    def test_departments_are_excluded_from_analytics_and_both_halfyear_pdfs(self):
+        from reportlab.platypus import Paragraph
+
+        for month, department, category in [(3, 'clinic', 'doctor'), (9, 'surgery', 'nurse')]:
+            for _ in range(5):
+                self.response(department=department, category=category, submitted_on=date(2026, month, 10))
+        saved = list(SurveyResponse.objects.order_by('id').values())
+        self.client.force_login(self.admin)
+        for half, category in [(1, 'Врач'), (2, 'Средний медперсонал')]:
+            with self.subTest(half=half):
+                data = survey_analytics(self.campaign, 2026, half)
+                self.assertEqual((data['count'], data['total']), (5, 50))
+                self.assertEqual([(g['dimension'], g['label']) for g in data['groups']], [('Категория', category)])
+                page = self.client.get(reverse('survey_dashboard'), {'period': f'2026-{half}'})
+                self.assertContains(page, 'Категории сотрудников')
+                for removed in ('Подразделения и категории', 'Подразделение:', 'Поликлиника', 'Хирургия'):
+                    self.assertNotContains(page, removed)
+                with patch('core.survey_pdf.Paragraph', wraps=Paragraph) as paragraphs:
+                    pdf = self.client.get(reverse('survey_pdf', args=[self.campaign.pk]), {'period': f'2026-{half}'})
+                self.assertEqual(pdf.status_code, 200)
+                self.assertTrue(pdf.content.startswith(b'%PDF-'))
+                text = '\n'.join(str(call.args[0]) for call in paragraphs.call_args_list)
+                self.assertIn('Средний общий балл', text)
+                self.assertIn(f'Категория: {category}', text)
+                for removed in ('Подразделение', 'Поликлиника', 'Хирургия'):
+                    self.assertNotIn(removed, text)
+        self.assertEqual(list(SurveyResponse.objects.order_by('id').values()), saved)
 
     def test_analytics_is_admin_only_and_never_contains_raw_comments(self):
         for _ in range(5):
