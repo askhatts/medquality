@@ -133,15 +133,14 @@ class AnonymousSurveyTests(TestCase):
         self.assertEqual(data['mis_stress'], 40)
         self.assertEqual(data['response_ratio'], 10)
 
-    def test_small_groups_and_small_complements_are_suppressed(self):
+    def test_analytics_never_breaks_down_employee_categories(self):
         for index in range(6):
             self.response(category='doctor' if index < 5 else 'nurse')
         data = survey_analytics(self.campaign)
         self.assertTrue(data['visible'])
-        self.assertEqual(len(data['groups']), 2)
-        self.assertFalse(any(g['visible'] for g in data['groups']))
+        self.assertEqual(data['groups'], [])
 
-    def test_departments_are_excluded_from_analytics_and_both_halfyear_pdfs(self):
+    def test_demographics_are_excluded_from_analytics_and_both_halfyear_pdfs(self):
         from reportlab.platypus import Paragraph
 
         for month, department, category in [(3, 'clinic', 'doctor'), (9, 'surgery', 'nurse')]:
@@ -149,14 +148,14 @@ class AnonymousSurveyTests(TestCase):
                 self.response(department=department, category=category, submitted_on=date(2026, month, 10))
         saved = list(SurveyResponse.objects.order_by('id').values())
         self.client.force_login(self.admin)
-        for half, category in [(1, 'Врач'), (2, 'Средний медперсонал')]:
+        for half in (1, 2):
             with self.subTest(half=half):
                 data = survey_analytics(self.campaign, 2026, half)
                 self.assertEqual((data['count'], data['total']), (5, 50))
-                self.assertEqual([(g['dimension'], g['label']) for g in data['groups']], [('Категория', category)])
+                self.assertEqual(data['groups'], [])
                 page = self.client.get(reverse('survey_dashboard'), {'period': f'2026-{half}'})
-                self.assertContains(page, 'Категории сотрудников')
-                for removed in ('Подразделения и категории', 'Подразделение:', 'Поликлиника', 'Хирургия'):
+                self.assertContains(page, 'средний общий балл')
+                for removed in ('Категории сотрудников', 'Категория:', 'Средний медперсонал', 'Подразделения и категории', 'Подразделение:', 'Поликлиника', 'Хирургия'):
                     self.assertNotContains(page, removed)
                 with patch('core.survey_pdf.Paragraph', wraps=Paragraph) as paragraphs:
                     pdf = self.client.get(reverse('survey_pdf', args=[self.campaign.pk]), {'period': f'2026-{half}'})
@@ -164,8 +163,7 @@ class AnonymousSurveyTests(TestCase):
                 self.assertTrue(pdf.content.startswith(b'%PDF-'))
                 text = '\n'.join(str(call.args[0]) for call in paragraphs.call_args_list)
                 self.assertIn('Средний общий балл', text)
-                self.assertIn(f'Категория: {category}', text)
-                for removed in ('Подразделение', 'Поликлиника', 'Хирургия'):
+                for removed in ('Показатели по категориям', 'Категория:', 'Средний медперсонал', 'Подразделение:', 'Поликлиника', 'Хирургия'):
                     self.assertNotIn(removed, text)
         self.assertEqual(list(SurveyResponse.objects.order_by('id').values()), saved)
 

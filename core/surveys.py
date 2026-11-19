@@ -165,18 +165,8 @@ def survey_analytics(campaign, year=None, half=None):
     data['response_ratio'] = round(len(responses) * 100 / campaign.audience_size, 1) if campaign.audience_size else None
     data['minimum_group'] = MIN_GROUP
     data['groups'] = []
-    # Department is not part of the survey reporting breakdown. In particular,
-    # never infer it from employee records or expose legacy department values.
-    for value, label in CATEGORIES + [('', 'Не указано')]:
-        members = [r for r in responses if r.category == value]
-        if not members:
-            continue
-        group = summarize(members)
-        # Also hide a large group if subtracting it from the total would
-        # disclose the metrics of a complementary group of fewer than five.
-        if 0 < len(responses) - len(members) < MIN_GROUP:
-            group['visible'] = False
-        data['groups'].append({'dimension': 'Категория', 'label': label, **group})
+    # Report only the whole selected period, never demographic breakdowns.
+    # Preserve existing answers without exposing or inferring staff groups.
     data['questions'] = []
     data['extra'] = []
     data['themes'] = []
