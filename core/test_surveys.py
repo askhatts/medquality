@@ -11,7 +11,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from .models import Assignment, Course, Profile, SurveyCampaign, SurveyResponse, TestAttempt
-from .surveys import survey_analytics
+from .surveys import QUESTIONS, burnout_self_assessment, survey_analytics
 
 
 class AnonymousSurveyTests(TestCase):
@@ -60,6 +60,82 @@ class AnonymousSurveyTests(TestCase):
         payload.pop('consent')
         self.client.post(reverse('survey_public'), payload)
         self.assertFalse(SurveyResponse.objects.exists())
+
+    def test_personal_burnout_result_reflects_q2_not_the_total_score(self):
+        labels = {
+            1: 'Выраженное эмоциональное истощение по самооценке',
+            2: 'Сохраняющиеся признаки выгорания по самооценке',
+            3: 'Начальные признаки выгорания по самооценке',
+            4: 'Стресс без ощущения выгорания по самооценке',
+            5: 'Признаки выгорания не отмечены по самооценке',
+        }
+        for value, label in labels.items():
+            with self.subTest(value=value):
+                browser = Client()
+                payload = self.submit_payload(browser)
+                payload.update({f'q{i}': '1' for i in range(1, 11)})
+                payload['q2'] = str(value)
+                page = browser.post(reverse('survey_public'), payload, follow=True)
+                self.assertContains(page, 'id="personal-burnout-result"')
+                self.assertContains(page, label)
+                self.assertContains(page, QUESTIONS[1][1][value - 1])
+                self.assertContains(page, 'не медицинский диагноз')
+                self.assertEqual(page.context['personal_result']['label'], label)
+                self.assertContains(browser.get(reverse('survey_public')), label)
+                self.assertIn('no-store', page['Cache-Control'])
+                self.assertEqual(page['X-Robots-Tag'], 'noindex, noarchive')
+        self.assertEqual(SurveyResponse.objects.count(), 5)
+        for answers in (None, {}, [], [5], [5, 0] + [5] * 8, [5, '3'] + [5] * 8, [5, True] + [5] * 8):
+            self.assertIsNone(burnout_self_assessment(answers))
+
+    def test_personal_result_is_not_accessible_by_query_or_from_other_browsers(self):
+        browser = Client()
+        payload = self.submit_payload(browser)
+        payload['q2'] = '1'
+        browser.post(reverse('survey_public'), payload)
+        row = SurveyResponse.objects.get()
+        self.assertContains(browser.get(reverse('survey_public')), 'id="personal-burnout-result"')
+        for user in (None, self.employee, self.admin):
+            outsider = Client()
+            if user:
+                outsider.force_login(user)
+            for query in ({}, {'receipt': str(row.receipt), 'id': str(row.pk)}):
+                page = outsider.get(reverse('survey_public'), query)
+                self.assertNotContains(page, 'id="personal-burnout-result"')
+                self.assertIsNone(page.context['personal_result'])
+        cookie = f'wellbeing_{self.campaign.pk}'
+        browser.cookies[cookie] = 'tampered-cookie'
+        self.assertNotContains(browser.get(reverse('survey_public')), 'id="personal-burnout-result"')
+
+    def test_hide_personal_result_keeps_answers_and_duplicate_protection(self):
+        payload = self.submit_payload(self.client)
+        payload['q2'] = '2'
+        self.client.post(reverse('survey_public'), payload)
+        original = SurveyResponse.objects.get().answers
+        page = self.client.post(reverse('survey_public'), {'action': 'hide_result'}, follow=True)
+        self.assertContains(page, 'Личный результат скрыт')
+        self.assertNotContains(page, 'id="personal-burnout-result"')
+        self.assertTrue(page.context['already_submitted'])
+        self.assertTrue(page.context['personal_result_hidden'])
+        payload['q2'] = '5'
+        self.client.post(reverse('survey_public'), payload)
+        self.assertEqual(SurveyResponse.objects.count(), 1)
+        self.assertEqual(SurveyResponse.objects.get().answers, original)
+        self.assertTrue(self.client.get(reverse('survey_public')).context['personal_result_hidden'])
+
+    def test_hidden_personal_result_does_not_hide_next_halfyear_result(self):
+        self.campaign.opens_on = date(2025, 1, 1)
+        self.campaign.save(update_fields=['opens_on'])
+        with patch('django.utils.timezone.localdate', return_value=date(2026, 6, 30)):
+            self.client.post(reverse('survey_public'), self.submit_payload(self.client))
+            self.client.post(reverse('survey_public'), {'action': 'hide_result'})
+        with patch('django.utils.timezone.localdate', return_value=date(2026, 7, 1)):
+            payload = self.submit_payload(self.client)
+            payload['q2'] = '3'
+            page = self.client.post(reverse('survey_public'), payload, follow=True)
+            self.assertContains(page, 'Начальные признаки выгорания по самооценке')
+            self.assertFalse(page.context['personal_result_hidden'])
+        self.assertEqual(SurveyResponse.objects.count(), 2)
 
     def test_receipt_cannot_be_reused_from_another_browser(self):
         payload = self.submit_payload(self.client)
@@ -110,6 +186,19 @@ class AnonymousSurveyTests(TestCase):
     def test_https_browser_without_origin_accepts_same_origin_referer(self):
         _, response = self.https_submission(referer='https://testserver/quality/survey/')
         self.assertEqual(response.status_code, 302)
+        self.assertEqual(SurveyResponse.objects.count(), 1)
+
+    def test_hiding_personal_result_also_requires_csrf(self):
+        client, _ = self.https_submission(origin='https://testserver')
+        url = reverse('survey_public')
+        response = client.post(url, {'action': 'hide_result'}, secure=True, HTTP_ORIGIN='https://testserver')
+        self.assertEqual(response.status_code, 403)
+        self.assertContains(client.get(url, secure=True), 'id="personal-burnout-result"')
+        response = client.post(url, {
+            'action': 'hide_result', 'csrfmiddlewaretoken': client.cookies['csrftoken'].value,
+        }, secure=True, HTTP_ORIGIN='https://testserver')
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(client.get(url, secure=True).context['personal_result_hidden'])
         self.assertEqual(SurveyResponse.objects.count(), 1)
 
     def test_https_browser_rejects_null_and_foreign_origins_even_with_token(self):

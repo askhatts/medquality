@@ -100,6 +100,23 @@ class CampaignSettingsForm(forms.ModelForm):
         widgets = {name: forms.DateInput(attrs={'type': 'date'}, format='%Y-%m-%d') for name in ('opens_on', 'closes_on')}
 
 
+def burnout_self_assessment(answers):
+    """Describe the respondent's Q2 choice, not a diagnosis or total-score tier."""
+    if not isinstance(answers, (list, tuple)) or len(answers) != 10:
+        return None
+    value = answers[1]
+    if type(value) is not int or not 1 <= value <= 5:
+        return None
+    labels = {
+        1: 'Выраженное эмоциональное истощение по самооценке',
+        2: 'Сохраняющиеся признаки выгорания по самооценке',
+        3: 'Начальные признаки выгорания по самооценке',
+        4: 'Стресс без ощущения выгорания по самооценке',
+        5: 'Признаки выгорания не отмечены по самооценке',
+    }
+    return {'label': labels[value], 'selected_answer': QUESTIONS[1][1][value - 1]}
+
+
 def summarize(responses):
     count = len(responses)
     if count < MIN_GROUP:

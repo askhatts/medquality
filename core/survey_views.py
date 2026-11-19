@@ -14,7 +14,7 @@ from django.views.decorators.debug import sensitive_post_parameters
 from django.views.decorators.http import require_http_methods
 
 from .models import AuditLog, SurveyCampaign, SurveyResponse
-from .surveys import CampaignSettingsForm, WellbeingForm, halfyear_bounds, halfyear_options, selected_halfyear, survey_analytics
+from .surveys import CampaignSettingsForm, WellbeingForm, burnout_self_assessment, halfyear_bounds, halfyear_options, selected_halfyear, survey_analytics
 
 
 def admin_only(user):
@@ -50,12 +50,22 @@ def survey_public(request):
     except (KeyError, ValueError, signing.BadSignature):
         receipt = uuid.uuid4()
     start, end = halfyear_bounds(today.year, 1 if today.month <= 6 else 2)
-    previous = SurveyResponse.objects.filter(campaign=campaign, receipt=receipt).only('submitted_on').first()
+    previous = SurveyResponse.objects.filter(campaign=campaign, receipt=receipt).only('submitted_on', 'answers').first()
     # A browser may answer again in a new half-year, with a fresh random
     # receipt. Past and future periods are never linked through one receipt.
     already_submitted = previous is not None and start <= previous.submitted_on <= end
     if previous is not None and not already_submitted:
         receipt = uuid.uuid4()
+    hidden_cookie = f'wellbeing_result_hidden_{campaign.pk}'
+    hidden_salt = f'wellbeing-result-hidden-{campaign.pk}'
+    hidden = request.get_signed_cookie(hidden_cookie, default='', salt=hidden_salt) == str(receipt)
+    if request.method == 'POST' and request.POST.get('action') == 'hide_result' and already_submitted:
+        response = redirect('survey_public')
+        response.set_signed_cookie(
+            hidden_cookie, str(receipt), salt=hidden_salt, max_age=31536000,
+            httponly=True, secure=request.is_secure(), samesite='Lax', path='/quality/survey/',
+        )
+        return response
     form = WellbeingForm(request.POST if request.method == 'POST' else None, initial={
         'receipt': signing.dumps(str(receipt), salt=salt),
     })
@@ -89,6 +99,8 @@ def survey_public(request):
                 return redirect('survey_public')
     response = render(request, 'core/survey_public.html', {
         'campaign': campaign, 'form': form, 'already_submitted': already_submitted,
+        'personal_result': burnout_self_assessment(previous.answers) if already_submitted and not hidden else None,
+        'personal_result_hidden': already_submitted and hidden,
     })
     response.set_signed_cookie(
         cookie, str(receipt), salt=salt, max_age=31536000,
@@ -98,6 +110,7 @@ def survey_public(request):
     # HTML forms need a same-origin Origin/Referer for Django's HTTPS CSRF
     # checks. Still disclose no referrer when navigating to another site.
     response['Referrer-Policy'] = 'same-origin'
+    response['X-Robots-Tag'] = 'noindex, noarchive'
     return response
 
 
