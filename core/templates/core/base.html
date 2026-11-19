@@ -464,6 +464,7 @@
         <a class="{% if request.resolver_match.url_name == 'assignments' or request.resolver_match.url_name == 'assignment_edit' %}active{% endif %}" href="{% url 'assignments' %}">Назначения</a>
         {% endif %}
         {% if user.profile.role == 'ADMIN' %}
+        <a class="{% if request.resolver_match.url_name == 'survey_dashboard' %}active{% endif %}" href="{% url 'survey_dashboard' %}">Опрос персонала</a>
         <a class="{% if request.resolver_match.url_name == 'employees' or request.resolver_match.url_name == 'employee_new' or request.resolver_match.url_name == 'employee_edit' %}active{% endif %}" href="{% url 'employees' %}">Сотрудники</a>
         <a class="{% if request.resolver_match.url_name == 'departments' %}active{% endif %}" href="{% url 'departments' %}">Подразделения</a>
         <a class="{% if request.resolver_match.url_name == 'password_requests' %}active{% endif %}" href="{% url 'password_requests' %}" aria-label="Запросы пароля: {{ password_request_count }}"><span>Запросы пароля</span><span class="nav-count alert">{{ password_request_count }}</span></a>

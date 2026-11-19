@@ -4,6 +4,7 @@ from django.contrib.auth.models import User
 from django.db import models
 from django.utils import timezone
 import re
+import uuid
 
 class Department(models.Model):
     name = models.CharField('Отдел / отделение', max_length=160, unique=True)
@@ -235,3 +236,46 @@ class AuditLog(models.Model):
     action = models.CharField(max_length=120)
     object_label = models.CharField(max_length=255, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+
+
+class SurveyCampaign(models.Model):
+    slug = models.SlugField(unique=True)
+    title = models.CharField(max_length=255)
+    active = models.BooleanField(default=True)
+    opens_on = models.DateField(default=timezone.localdate)
+    closes_on = models.DateField(null=True, blank=True)
+    audience_size = models.PositiveIntegerField(default=0)
+    # Scoring is tied to the questionnaire revision, not editable per response.
+    questionnaire_version = models.CharField(max_length=40, default='cyamio-mini-z-2026-v1', editable=False)
+
+    @property
+    def is_open(self):
+        today = timezone.localdate()
+        return self.active and self.opens_on <= today and (not self.closes_on or today <= self.closes_on)
+
+    def __str__(self):
+        return self.title
+
+    class Meta:
+        ordering = ['-opens_on', '-id']
+        constraints = [models.CheckConstraint(
+            condition=models.Q(closes_on__isnull=True) | models.Q(closes_on__gte=models.F('opens_on')),
+            name='survey_closes_after_open',
+        )]
+
+
+class SurveyResponse(models.Model):
+    # Intentionally no user, profile, IP, user-agent, session or precise timestamp.
+    # A random browser receipt prevents accidental repeated submission.
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    campaign = models.ForeignKey(SurveyCampaign, on_delete=models.PROTECT, related_name='responses')
+    receipt = models.UUIDField(unique=True, editable=False)
+    answers = models.JSONField()
+    additional_answers = models.JSONField(default=dict)
+    department = models.CharField(max_length=40, blank=True)
+    category = models.CharField(max_length=40, blank=True)
+    tenure = models.CharField(max_length=24, blank=True)
+    schedule = models.CharField(max_length=24, blank=True)
+    combined_roles = models.CharField(max_length=8, blank=True)
+    comment = models.TextField(blank=True, max_length=2000)
+    submitted_on = models.DateField(default=timezone.localdate)

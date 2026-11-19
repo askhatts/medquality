@@ -1,12 +1,16 @@
 from django.urls import path
 
 from . import views
+from . import survey_views
 
 
 urlpatterns = [
     path('health/', views.health, name='health'),
     path('', views.dashboard, name='dashboard'),
     path('login/', views.login_view, name='login'),
+    path('survey/', survey_views.survey_public, name='survey_public'),
+    path('surveys/analytics/', survey_views.survey_dashboard, name='survey_dashboard'),
+    path('surveys/<int:pk>/pdf/', survey_views.survey_pdf, name='survey_pdf'),
     path('password/forgot/', views.forgot_password, name='forgot_password'),
     path('logout/', views.logout_view, name='logout'),
     path('session/ping/', views.session_ping, name='session_ping'),
