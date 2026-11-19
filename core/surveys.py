@@ -100,13 +100,18 @@ class CampaignSettingsForm(forms.ModelForm):
         widgets = {name: forms.DateInput(attrs={'type': 'date'}, format='%Y-%m-%d') for name in ('opens_on', 'closes_on')}
 
 
+def wellbeing_scores(answers):
+    """Sum the validated ten-item questionnaire, in its original direction."""
+    return {'total': sum(answers), 'support': sum(answers[:5]), 'pace': sum(answers[5:])}
+
+
 def burnout_self_assessment(answers):
-    """Describe the respondent's Q2 choice, not a diagnosis or total-score tier."""
+    """Return personal scores and the separate Q2 self-assessment, not a diagnosis."""
     if not isinstance(answers, (list, tuple)) or len(answers) != 10:
         return None
-    value = answers[1]
-    if type(value) is not int or not 1 <= value <= 5:
+    if any(type(value) is not int or not 1 <= value <= 5 for value in answers):
         return None
+    value = answers[1]
     labels = {
         1: 'Выраженное эмоциональное истощение по самооценке',
         2: 'Сохраняющиеся признаки выгорания по самооценке',
@@ -114,16 +119,23 @@ def burnout_self_assessment(answers):
         4: 'Стресс без ощущения выгорания по самооценке',
         5: 'Признаки выгорания не отмечены по самооценке',
     }
-    return {'label': labels[value], 'selected_answer': QUESTIONS[1][1][value - 1]}
+    scores = wellbeing_scores(answers)
+    return {
+        'label': labels[value], 'selected_answer': QUESTIONS[1][1][value - 1], **scores,
+        'total_explanation': 'Благоприятная оценка рабочей среды.' if scores['total'] >= 40 else 'Порог благоприятной оценки рабочей среды — 40 баллов — не достигнут.',
+        'support_explanation': 'Благоприятная оценка поддержки в рабочей среде.' if scores['support'] >= 20 else 'Порог благоприятной оценки поддержки — 20 баллов — не достигнут.',
+        'pace_explanation': 'Благоприятная оценка темпа работы и нагрузки документацией.' if scores['pace'] >= 20 else 'Порог благоприятной оценки нагрузки — 20 баллов — не достигнут.',
+    }
 
 
 def summarize(responses):
     count = len(responses)
     if count < MIN_GROUP:
         return {'count': count, 'visible': False}
-    totals = [sum(r.answers) for r in responses]
-    supports = [sum(r.answers[:5]) for r in responses]
-    paces = [sum(r.answers[5:]) for r in responses]
+    scores = [wellbeing_scores(r.answers) for r in responses]
+    totals = [score['total'] for score in scores]
+    supports = [score['support'] for score in scores]
+    paces = [score['pace'] for score in scores]
     return {
         'count': count, 'visible': True,
         'total': round(mean(totals), 1), 'support': round(mean(supports), 1),

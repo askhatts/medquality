@@ -11,7 +11,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from .models import Assignment, Course, Profile, SurveyCampaign, SurveyResponse, TestAttempt
-from .surveys import QUESTIONS, burnout_self_assessment, survey_analytics
+from .surveys import QUESTIONS, burnout_self_assessment, summarize, survey_analytics
 
 
 class AnonymousSurveyTests(TestCase):
@@ -106,6 +106,49 @@ class AnonymousSurveyTests(TestCase):
         cookie = f'wellbeing_{self.campaign.pk}'
         browser.cookies[cookie] = 'tampered-cookie'
         self.assertNotContains(browser.get(reverse('survey_public')), 'id="personal-burnout-result"')
+
+    def test_personal_scores_match_methodology_boundaries_and_report_formulas(self):
+        from types import SimpleNamespace
+
+        cases = [
+            ([1] * 10, (10, 5, 5), (False, False, False)),
+            ([5] * 10, (50, 25, 25), (True, True, True)),
+            ([4] * 10, (40, 20, 20), (True, True, True)),
+            ([3, 4, 4, 4, 4] + [4] * 5, (39, 19, 20), (False, False, True)),
+            ([4] * 5 + [3] * 5, (35, 20, 15), (False, True, False)),
+        ]
+        for answers, expected, favourable in cases:
+            with self.subTest(answers=answers):
+                original = answers.copy()
+                result = burnout_self_assessment(answers)
+                self.assertEqual(tuple(result[k] for k in ('total', 'support', 'pace')), expected)
+                report = summarize([SimpleNamespace(answers=answers)] * 5)
+                self.assertEqual(tuple(report[k] for k in ('total', 'support', 'pace')), expected)
+                for key, reached in zip(('total', 'support', 'pace'), favourable):
+                    self.assertEqual('не достигнут' not in result[f'{key}_explanation'], reached)
+                self.assertEqual(answers, original)
+        high_total = burnout_self_assessment([5, 3] + [5] * 8)
+        self.assertEqual(high_total['total'], 48)
+        self.assertEqual(high_total['label'], 'Начальные признаки выгорания по самооценке')
+        for invalid in ([0] + [5] * 9, [6] + [5] * 9, ['5'] + [5] * 9, [True] + [5] * 9):
+            self.assertIsNone(burnout_self_assessment(invalid))
+
+    def test_personal_score_cards_render_and_hide_together_without_extra_question_points(self):
+        payload = self.submit_payload(self.client)
+        payload.update({f'q{i}': '4' for i in range(1, 11)})
+        payload.update({'q11': '4', 'q12': '1', 'q13': '5', 'comment': 'Дополнительный ответ'})
+        page = self.client.post(reverse('survey_public'), payload, follow=True)
+        self.assertContains(page, 'id="personal-total-score"><strong>40 / 50</strong>')
+        self.assertContains(page, 'id="personal-support-score"><strong>20 / 25</strong>')
+        self.assertContains(page, 'id="personal-pace-score"><strong>20 / 25</strong>')
+        self.assertContains(page, 'Стресс без ощущения выгорания по самооценке')
+        self.assertContains(page, 'Дополнительные вопросы 11–14 в расчёт не входят')
+        saved = list(SurveyResponse.objects.values())
+        hidden = self.client.post(reverse('survey_public'), {'action': 'hide_result'}, follow=True)
+        for field in ('total', 'support', 'pace'):
+            self.assertNotContains(hidden, f'id="personal-{field}-score"')
+        self.assertIsNone(hidden.context['personal_result'])
+        self.assertEqual(list(SurveyResponse.objects.values()), saved)
 
     def test_hide_personal_result_keeps_answers_and_duplicate_protection(self):
         payload = self.submit_payload(self.client)

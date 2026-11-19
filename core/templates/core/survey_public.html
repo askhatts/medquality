@@ -10,9 +10,16 @@
 {% if personal_result %}
 <section class="card notice" id="personal-burnout-result" aria-labelledby="personal-result-heading">
 <h2 id="personal-result-heading">Ваш результат по самооценке</h2>
+<div class="grid">
+<div class="card"><h3>Общий балл</h3><p id="personal-total-score"><strong>{{ personal_result.total }} / 50</strong></p><p>{{ personal_result.total_explanation }}</p><small class="muted">Сумма ответов на вопросы 1–10. Диапазон: 10–50.</small></div>
+<div class="card"><h3>Поддерживающая рабочая среда</h3><p id="personal-support-score"><strong>{{ personal_result.support }} / 25</strong></p><p>{{ personal_result.support_explanation }}</p><small class="muted">Сумма ответов на вопросы 1–5. Диапазон: 5–25.</small></div>
+<div class="card"><h3>Темп работы и документация</h3><p id="personal-pace-score"><strong>{{ personal_result.pace }} / 25</strong></p><p>{{ personal_result.pace_explanation }}</p><small class="muted">Сумма ответов на вопросы 6–10. Диапазон: 5–25.</small></div>
+</div>
+<p class="muted">Более высокий балл означает более благоприятную оценку рабочей среды. Дополнительные вопросы 11–14 в расчёт не входят. Повторное обратное кодирование ответов не применяется.</p>
+<h3>Признаки выгорания — отдельный показатель</h3>
 <p><strong>{{ personal_result.label }}</strong></p>
 <p>Вы выбрали в вопросе № 2: «{{ personal_result.selected_answer }}»</p>
-<p class="muted">Это описание вашего ответа о признаках профессионального выгорания, а не медицинский диагноз. Общий балл анкеты не используется для определения уровня выгорания.</p>
+<p class="muted">Баллы характеризуют рабочую среду и нагрузку. Описание признаков профессионального выгорания основано отдельно на вашем ответе на вопрос № 2 — это не медицинский диагноз и не «процент выгорания» по общей сумме баллов.</p>
 <p>Если напряжение или истощение сохраняются и мешают вам, обсудите своё состояние с психологом или врачом.</p>
 <p class="muted">Личный результат доступен в этом браузере по случайному cookie и не связан с логином. На общем устройстве он может быть виден следующему посетителю этого браузера — при необходимости скройте его. В админке и отчётах доступны только общие показатели.</p>
 <form method="post">{% csrf_token %}<input type="hidden" name="action" value="hide_result"><button type="submit">Скрыть личный результат</button></form>
