@@ -87,7 +87,9 @@ def survey_public(request):
         httponly=True, secure=request.is_secure(), samesite='Lax',
         path='/quality/survey/',
     )
-    response['Referrer-Policy'] = 'no-referrer'
+    # HTML forms need a same-origin Origin/Referer for Django's HTTPS CSRF
+    # checks. Still disclose no referrer when navigating to another site.
+    response['Referrer-Policy'] = 'same-origin'
     return response
 
 

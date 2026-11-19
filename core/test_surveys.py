@@ -81,6 +81,44 @@ class AnonymousSurveyTests(TestCase):
         self.assertEqual(client.post(reverse('survey_public'), payload).status_code, 403)
         self.assertFalse(SurveyResponse.objects.exists())
 
+    def https_submission(self, *, origin=None, referer=None):
+        client = Client(enforce_csrf_checks=True)
+        url = reverse('survey_public')
+        page = client.get(url, secure=True)
+        self.assertEqual(page['Referrer-Policy'], 'same-origin')
+        self.assertContains(page, '<meta name="referrer" content="same-origin">')
+        payload = {
+            'receipt': page.context['form']['receipt'].value(),
+            'csrfmiddlewaretoken': client.cookies['csrftoken'].value,
+            'consent': 'on', **{f'q{i}': '4' for i in range(1, 11)},
+        }
+        headers = {}
+        if origin is not None:
+            headers['HTTP_ORIGIN'] = origin
+        if referer is not None:
+            headers['HTTP_REFERER'] = referer
+        return client, client.post(url, payload, secure=True, **headers)
+
+    def test_https_browser_submission_saves_and_shows_confirmation_once(self):
+        client, response = self.https_submission(origin='https://testserver')
+        self.assertRedirects(response, reverse('survey_public'))
+        self.assertEqual(SurveyResponse.objects.count(), 1)
+        self.assertEqual(SurveyResponse.objects.get().answers, [4] * 10)
+        page = client.get(reverse('survey_public'), secure=True)
+        self.assertTrue(page.context['already_submitted'])
+
+    def test_https_browser_without_origin_accepts_same_origin_referer(self):
+        _, response = self.https_submission(referer='https://testserver/quality/survey/')
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(SurveyResponse.objects.count(), 1)
+
+    def test_https_browser_rejects_null_and_foreign_origins_even_with_token(self):
+        for origin in ('null', 'https://untrusted.example'):
+            with self.subTest(origin=origin):
+                _, response = self.https_submission(origin=origin)
+                self.assertEqual(response.status_code, 403)
+        self.assertFalse(SurveyResponse.objects.exists())
+
     def test_scores_use_original_direction_and_additional_answers_do_not_affect_sum(self):
         for index in range(10):
             self.response(
