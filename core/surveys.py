@@ -123,20 +123,31 @@ def halfyear_bounds(year, half):
     return date(year, 1 if half == 1 else 7, 1), date(year, 6 if half == 1 else 12, 30 if half == 1 else 31)
 
 
-def halfyear_options(campaign):
+def halfyear_options(campaign, selected_year=None):
     today = timezone.localdate()
     counts = Counter((day.year, 1 if day.month <= 6 else 2)
                      for day in campaign.responses.values_list('submitted_on', flat=True))
     years = {today.year} | {year for year, half in counts}
+    if selected_year is not None:
+        years.add(selected_year)
     return [
         {'value': f'{year}-{half}', 'year': year, 'half': half,
-         'label': f'{"I" if half == 1 else "II"} полугодие {year} года',
+         'label': f'{half} полугодие',
          'count': counts[(year, half)]}
         for year in sorted(years, reverse=True) for half in (2, 1)
     ]
 
 
-def selected_halfyear(value):
+def selected_halfyear(value=None, *, year=None, half=None):
+    if year is not None or half is not None:
+        today = timezone.localdate()
+        try:
+            year = today.year if year in (None, '', 'auto') else int(year)
+            half = (1 if today.month <= 6 else 2) if half in (None, '', 'auto') else int(half)
+            halfyear_bounds(year, half)
+        except (ValueError, TypeError):
+            raise ValueError('Выберите корректный год и полугодие.')
+        return year, half
     if not value:
         today = timezone.localdate()
         return today.year, 1 if today.month <= 6 else 2
@@ -157,7 +168,7 @@ def survey_analytics(campaign, year=None, half=None):
             end = min(end, timezone.localdate())
         queryset = queryset.filter(submitted_on__gte=start, submitted_on__lte=end)
         period = {'period_value': f'{year}-{half}',
-                  'period_label': f'{"I" if half == 1 else "II"} полугодие {year} года',
+                  'period_label': f'{half} полугодие',
                   'date_from': start, 'date_to': end}
     responses = list(queryset)
     data = summarize(responses)

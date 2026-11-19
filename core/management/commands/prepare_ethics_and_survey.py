@@ -77,7 +77,7 @@ class Command(BaseCommand):
         campaign, opened = SurveyCampaign.objects.get_or_create(
             slug='staff-wellbeing-2026-11',
             defaults={
-                'title': 'Профессиональное благополучие сотрудников ЦЯМиО · ноябрь 2026',
+                'title': 'Профессиональное благополучие сотрудников ЦЯМиО',
                 'opens_on': timezone.localdate(),
                 'audience_size': Profile.objects.filter(user__is_active=True).exclude(role='ADMIN').count(),
             },

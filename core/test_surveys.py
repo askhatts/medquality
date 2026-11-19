@@ -256,6 +256,77 @@ class AnonymousSurveyTests(TestCase):
             self.assertEqual(self.client.get(reverse('survey_dashboard'), {'period': period}).status_code, 400)
             self.assertEqual(self.client.get(reverse('survey_pdf', args=[self.campaign.pk]), {'period': period}).status_code, 400)
 
+    @patch('django.utils.timezone.localdate', return_value=date(2026, 11, 19))
+    def test_new_submission_updates_total_current_half_and_live_fragment(self, today):
+        self.campaign.opens_on = date(2026, 1, 1)
+        self.campaign.save(update_fields=['opens_on'])
+        for _ in range(5):
+            self.response(submitted_on=date(2026, 3, 10))
+        self.client.force_login(self.admin)
+        url = reverse('survey_dashboard')
+        self.assertEqual(self.client.get(url).context['analytics']['count'], 0)
+        respondent = Client()
+        payload = self.submit_payload(respondent)
+        self.assertRedirects(respondent.post(reverse('survey_public'), payload), reverse('survey_public'))
+        page = self.client.get(url, {'year': 'auto', 'half': 'auto', 'refresh': '1'})
+        self.assertEqual(page.context['analytics']['count'], 1)
+        self.assertEqual(page.context['all_responses_count'], 6)
+        self.assertEqual({p['half']: p['count'] for p in page.context['period_options']}, {1: 5, 2: 1})
+        self.assertContains(page, 'id="survey-period-count">1</div>')
+        self.assertContains(page, 'id="survey-total-count">6</div>')
+        self.assertContains(page, 'year=auto&amp;half=auto')
+        self.assertNotContains(page, '<!doctype')
+        self.assertNotContains(page, 'Настройки приёма ответов')
+        self.assertIn('no-store', page['Cache-Control'])
+        self.assertEqual(self.client.get(url, {'year': 'auto', 'half': '1'}).context['analytics']['count'], 5)
+        self.client.force_login(self.employee)
+        self.assertEqual(self.client.get(url, {'refresh': '1'}).status_code, 403)
+        self.client.logout()
+        self.assertEqual(self.client.get(url, {'refresh': '1'}).status_code, 302)
+
+    def test_current_period_and_pdf_follow_year_changes_without_reconfiguration(self):
+        self.response(submitted_on=date(2026, 12, 31))
+        self.response(submitted_on=date(2027, 1, 1))
+        self.client.force_login(self.admin)
+        url = reverse('survey_dashboard')
+        for day, selected in [(date(2026, 12, 31), '2026-2'), (date(2027, 1, 1), '2027-1'), (date(2027, 7, 1), '2027-2')]:
+            with self.subTest(day=day), patch('django.utils.timezone.localdate', return_value=day):
+                page = self.client.get(url, {'year': 'auto', 'half': 'auto'})
+                self.assertEqual(page.context['selected_period'], selected)
+                self.assertEqual(page.context['selected_year'], 'auto')
+                self.assertEqual(page.context['analytics']['period_label'], f'{selected[-1]} полугодие')
+                self.assertEqual(page.context['analytics']['count'], 0 if day.month == 7 else 1)
+                with patch('core.survey_pdf.build_survey_pdf', return_value=b'%PDF-auto-test') as builder:
+                    pdf = self.client.get(reverse('survey_pdf', args=[self.campaign.pk]), {'year': 'auto', 'half': 'auto'})
+                self.assertEqual(builder.call_args.args[1]['period_value'], selected)
+                self.assertIn(f'{day.year}-H{selected[-1]}.pdf', pdf['Content-Disposition'])
+        with patch('django.utils.timezone.localdate', return_value=date(2027, 1, 1)):
+            page = self.client.get(url, {'year': '2026', 'half': '2'})
+            self.assertEqual(page.context['analytics']['count'], 1)
+            self.assertEqual(page.context['year_options'], [2027, 2026])
+
+    def test_browser_can_submit_once_each_halfyear_with_unlinked_receipts(self):
+        self.campaign.opens_on = date(2025, 1, 1)
+        self.campaign.save(update_fields=['opens_on'])
+        dates = [date(2026, 6, 30), date(2026, 7, 1), date(2027, 1, 1)]
+        for index, day in enumerate(dates, 1):
+            with self.subTest(day=day), patch('django.utils.timezone.localdate', return_value=day):
+                page = self.client.get(reverse('survey_public'))
+                self.assertFalse(page.context['already_submitted'])
+                payload = self.submit_payload(self.client)
+                self.client.post(reverse('survey_public'), payload)
+                self.assertTrue(self.client.get(reverse('survey_public')).context['already_submitted'])
+                self.client.post(reverse('survey_public'), payload)
+                self.assertEqual(SurveyResponse.objects.count(), index)
+        self.assertEqual(set(SurveyResponse.objects.values_list('submitted_on', flat=True)), set(dates))
+        self.assertEqual(len(set(SurveyResponse.objects.values_list('receipt', flat=True))), 3)
+
+    def test_invalid_year_and_half_filters_are_rejected(self):
+        self.client.force_login(self.admin)
+        for filters in ({'year': 'no'}, {'half': '3'}, {'year': '9999'}, {'half': '2026-1'}):
+            for name, args in [('survey_dashboard', []), ('survey_pdf', [self.campaign.pk])]:
+                self.assertEqual(self.client.get(reverse(name, args=args), filters).status_code, 400)
+
     def test_date_distribution_preserves_answers_and_leaves_new_submissions_untouched(self):
         for i in range(114):
             SurveyResponse.objects.create(
