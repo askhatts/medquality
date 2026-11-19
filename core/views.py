@@ -186,7 +186,7 @@ def visible_assignments(user):
     qs = Assignment.objects.select_related(
         'user', 'user__profile', 'user__profile__department',
         'user__profile__employee_type', 'course', 'course__direction', 'test_version',
-    ).prefetch_related('attempts')
+    ).prefetch_related(Prefetch('attempts', queryset=TestAttempt.objects.defer('answers_snapshot').order_by('number')))
     if role_in(user, 'ADMIN', 'METHODIST'): return qs
     if is_head(user): return qs.filter(user__profile__department=profile(user).department)
     return qs.filter(user=user)
