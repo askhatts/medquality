@@ -5,7 +5,7 @@ from django.contrib.auth.decorators import login_required
 from django.core import signing
 from django.db import transaction
 from django.db.models import Q
-from django.http import HttpResponse, HttpResponseForbidden
+from django.http import HttpResponse, HttpResponseBadRequest, HttpResponseForbidden
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.cache import never_cache
@@ -13,7 +13,7 @@ from django.views.decorators.debug import sensitive_post_parameters
 from django.views.decorators.http import require_http_methods
 
 from .models import AuditLog, SurveyCampaign, SurveyResponse
-from .surveys import CampaignSettingsForm, WellbeingForm, survey_analytics
+from .surveys import CampaignSettingsForm, WellbeingForm, halfyear_options, selected_halfyear, survey_analytics
 
 
 def admin_only(user):
@@ -22,6 +22,12 @@ def admin_only(user):
 
 def receipt_cookie(campaign):
     return f'wellbeing_{campaign.pk}'
+
+
+@never_cache
+@require_http_methods(['GET'])
+def guest_home(request):
+    return render(request, 'core/guest_home.html')
 
 
 @never_cache
@@ -93,7 +99,13 @@ def survey_dashboard(request):
         return HttpResponseForbidden('Раздел доступен только сисадмину.')
     campaigns = SurveyCampaign.objects.all()
     selected_id = request.GET.get('campaign')
+    if selected_id and not selected_id.isdigit():
+        return HttpResponseBadRequest('Некорректная анкета.')
     campaign = get_object_or_404(campaigns, pk=selected_id) if selected_id else campaigns.first()
+    try:
+        year, half = selected_halfyear(request.GET.get('period'))
+    except ValueError as error:
+        return HttpResponseBadRequest(str(error))
     form = CampaignSettingsForm(request.POST or None, instance=campaign) if campaign else None
     if request.method == 'POST' and campaign and form.is_valid():
         with transaction.atomic():
@@ -101,10 +113,12 @@ def survey_dashboard(request):
             form.save()
             AuditLog.objects.create(user=request.user, action='Изменены настройки анонимного опроса', object_label=campaign.title)
         messages.success(request, 'Настройки опроса сохранены.')
-        return redirect(f'{request.path}?campaign={campaign.pk}')
+        return redirect(f'{request.path}?campaign={campaign.pk}&period={year}-{half}')
     return render(request, 'core/survey_dashboard.html', {
         'campaign': campaign, 'campaigns': campaigns, 'settings_form': form,
-        'analytics': survey_analytics(campaign) if campaign else None,
+        'period_options': halfyear_options(campaign) if campaign else [],
+        'selected_period': f'{year}-{half}',
+        'analytics': survey_analytics(campaign, year, half) if campaign else None,
     })
 
 
@@ -115,7 +129,11 @@ def survey_pdf(request, pk):
     if not admin_only(request.user):
         return HttpResponseForbidden('Раздел доступен только сисадмину.')
     campaign = get_object_or_404(SurveyCampaign, pk=pk)
+    try:
+        year, half = selected_halfyear(request.GET.get('period'))
+    except ValueError as error:
+        return HttpResponseBadRequest(str(error))
     from .survey_pdf import build_survey_pdf
-    response = HttpResponse(build_survey_pdf(campaign, survey_analytics(campaign)), content_type='application/pdf')
-    response['Content-Disposition'] = f'attachment; filename="wellbeing-{campaign.slug}.pdf"'
+    response = HttpResponse(build_survey_pdf(campaign, survey_analytics(campaign, year, half)), content_type='application/pdf')
+    response['Content-Disposition'] = f'attachment; filename="wellbeing-{year}-H{half}.pdf"'
     return response

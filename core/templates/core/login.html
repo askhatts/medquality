@@ -26,8 +26,8 @@
       <button type="submit">Войти в портал</button>
     </form>
     <p class="login-help"><a href="{% url 'forgot_password' %}">Забыли пароль?</a></p>
-    <p class="login-help"><a class="btn secondary" href="{% url 'survey_public' %}">Вход без логина — анонимный опрос</a></p>
-    <p class="muted"><small>Участие добровольное. Без входа доступна только анкета.</small></p>
+    <p class="login-help"><a class="btn secondary" href="{% url 'guest_home' %}">Вход без логина</a></p>
+    <p class="muted"><small>Открытые разделы портала и добровольные опросы.</small></p>
     <p class="login-security-note">Закрытая система для сотрудников ЦЯМиО</p>
   </div>
 </section>

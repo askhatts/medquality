@@ -4,9 +4,11 @@ This is a local working adaptation, not a clinical diagnosis. All ten scales
 already point towards a favourable score of five: never reverse-code again.
 """
 from collections import Counter
+from datetime import date
 from statistics import mean
 
 from django import forms
+from django.utils import timezone
 
 from .models import SurveyCampaign
 
@@ -115,9 +117,51 @@ def summarize(responses):
     }
 
 
-def survey_analytics(campaign):
-    responses = list(campaign.responses.all())
+def halfyear_bounds(year, half):
+    if not 2000 <= year <= 2099 or half not in (1, 2):
+        raise ValueError('Некорректное полугодие.')
+    return date(year, 1 if half == 1 else 7, 1), date(year, 6 if half == 1 else 12, 30 if half == 1 else 31)
+
+
+def halfyear_options(campaign):
+    today = timezone.localdate()
+    counts = Counter((day.year, 1 if day.month <= 6 else 2)
+                     for day in campaign.responses.values_list('submitted_on', flat=True))
+    years = {today.year} | {year for year, half in counts}
+    return [
+        {'value': f'{year}-{half}', 'year': year, 'half': half,
+         'label': f'{"I" if half == 1 else "II"} полугодие {year} года',
+         'count': counts[(year, half)]}
+        for year in sorted(years, reverse=True) for half in (2, 1)
+    ]
+
+
+def selected_halfyear(value):
+    if not value:
+        today = timezone.localdate()
+        return today.year, 1 if today.month <= 6 else 2
+    try:
+        year, half = (int(item) for item in value.split('-'))
+        halfyear_bounds(year, half)
+    except (ValueError, TypeError):
+        raise ValueError('Выберите полугодие в формате ГГГГ-1 или ГГГГ-2.')
+    return year, half
+
+
+def survey_analytics(campaign, year=None, half=None):
+    queryset = campaign.responses.all()
+    period = {}
+    if year is not None and half is not None:
+        start, end = halfyear_bounds(year, half)
+        if start <= timezone.localdate():
+            end = min(end, timezone.localdate())
+        queryset = queryset.filter(submitted_on__gte=start, submitted_on__lte=end)
+        period = {'period_value': f'{year}-{half}',
+                  'period_label': f'{"I" if half == 1 else "II"} полугодие {year} года',
+                  'date_from': start, 'date_to': end}
+    responses = list(queryset)
     data = summarize(responses)
+    data.update(period)
     data['response_ratio'] = round(len(responses) * 100 / campaign.audience_size, 1) if campaign.audience_size else None
     data['minimum_group'] = MIN_GROUP
     data['groups'] = []

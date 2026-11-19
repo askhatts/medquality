@@ -1,9 +1,11 @@
 import uuid
-from datetime import timedelta
+from datetime import date, timedelta
 from io import StringIO
+from unittest.mock import patch
 
 from django.contrib.auth.models import User
 from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.test import Client, TestCase
 from django.urls import reverse
 from django.utils import timezone
@@ -151,3 +153,72 @@ class AnonymousSurveyTests(TestCase):
         self.assertEqual(course.lessons.count(), 1)
         self.assertEqual(course.internal_documents.count(), 1)
         self.assertEqual((Assignment.objects.count(), TestAttempt.objects.count(), SurveyResponse.objects.count()), counts_before)
+
+    def test_guest_entry_is_a_public_section_hub(self):
+        page = self.client.get(reverse('login'))
+        self.assertContains(page, 'href="/quality/guest/">Вход без логина</a>')
+        self.assertNotContains(page, 'Вход без логина — анонимный опрос')
+        hub = self.client.get(reverse('guest_home'))
+        self.assertContains(hub, 'Профессиональное благополучие и выгорание')
+        self.assertContains(hub, reverse('survey_public'))
+        self.assertNotContains(hub, 'side-nav')
+        self.client.force_login(self.employee)
+        self.assertNotContains(self.client.get(reverse('guest_home')), self.employee.username)
+
+    @patch('django.utils.timezone.localdate', return_value=date(2026, 11, 19))
+    def test_analytics_and_pdf_use_the_selected_halfyear(self, today):
+        for _ in range(5):
+            self.response(submitted_on=date(2026, 6, 30))
+        for _ in range(7):
+            self.response(answers=[4] * 10, submitted_on=date(2026, 7, 1))
+        first = survey_analytics(self.campaign, 2026, 1)
+        second = survey_analytics(self.campaign, 2026, 2)
+        self.assertEqual((first['count'], first['total']), (5, 50))
+        self.assertEqual((second['count'], second['total']), (7, 40))
+        self.assertEqual(second['date_to'], date(2026, 11, 19))
+        self.client.force_login(self.admin)
+        page = self.client.get(reverse('survey_dashboard'), {'period': '2026-1'})
+        self.assertEqual(page.context['analytics']['count'], 5)
+        self.assertContains(page, '?period=2026-1')
+        self.assertEqual({p['value']: p['count'] for p in page.context['period_options']}, {'2026-1': 5, '2026-2': 7})
+        with patch('core.survey_pdf.build_survey_pdf', return_value=b'%PDF-period-test') as builder:
+            pdf = self.client.get(reverse('survey_pdf', args=[self.campaign.pk]), {'period': '2026-2'})
+        self.assertEqual(builder.call_args.args[1]['count'], 7)
+        self.assertIn('2026-H2.pdf', pdf['Content-Disposition'])
+
+    def test_malformed_reporting_period_is_rejected(self):
+        self.client.force_login(self.admin)
+        for period in ('2026-3', 'not-a-date', '9999-2', '2026-1-2'):
+            self.assertEqual(self.client.get(reverse('survey_dashboard'), {'period': period}).status_code, 400)
+            self.assertEqual(self.client.get(reverse('survey_pdf', args=[self.campaign.pk]), {'period': period}).status_code, 400)
+
+    def test_date_distribution_preserves_answers_and_leaves_new_submissions_untouched(self):
+        for i in range(114):
+            SurveyResponse.objects.create(
+                campaign=self.campaign,
+                receipt=uuid.uuid5(uuid.NAMESPACE_URL, f'test-history:2026:20261119:survey:{i}'),
+                answers=[4 + i % 2] * 10, submitted_on=date(2026, 11, 19),
+                additional_answers={'11': '1'}, comment=f'Ответ {i}',
+            )
+        new_response = self.response(submitted_on=date(2026, 11, 19), comment='Новая анкета через форму')
+        before = list(SurveyResponse.objects.order_by('id').values('id', 'receipt', 'answers', 'additional_answers', 'comment'))
+        args = {'campaign': self.campaign.slug, 'as_of': date(2026, 11, 19), 'stdout': StringIO()}
+        call_command('distribute_survey_halfyears', **args)
+        self.assertEqual(self.campaign.responses.filter(submitted_on__lt=date(2026, 7, 1)).count(), 0)
+        call_command('distribute_survey_halfyears', apply=True, **args)
+        self.assertEqual(self.campaign.responses.filter(submitted_on__lt=date(2026, 7, 1)).count(), 77)
+        self.assertEqual(self.campaign.responses.filter(submitted_on__gte=date(2026, 7, 1)).count(), 38)
+        self.assertEqual(list(SurveyResponse.objects.order_by('id').values('id', 'receipt', 'answers', 'additional_answers', 'comment')), before)
+        new_response.refresh_from_db()
+        self.assertEqual(new_response.submitted_on, date(2026, 11, 19))
+        self.assertTrue(all(day.weekday() < 5 for day in self.campaign.responses.values_list('submitted_on', flat=True)))
+        dates = list(self.campaign.responses.order_by('id').values_list('submitted_on', flat=True))
+        call_command('distribute_survey_halfyears', apply=True, **args)
+        self.assertEqual(list(self.campaign.responses.order_by('id').values_list('submitted_on', flat=True)), dates)
+
+    def test_distribution_cancels_if_original_set_is_incomplete(self):
+        response = self.response(submitted_on=date(2026, 11, 19))
+        with self.assertRaises(CommandError):
+            call_command('distribute_survey_halfyears', campaign=self.campaign.slug, as_of=date(2026, 11, 19), apply=True, stdout=StringIO())
+        response.refresh_from_db()
+        self.assertEqual(response.submitted_on, date(2026, 11, 19))

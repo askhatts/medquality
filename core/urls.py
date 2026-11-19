@@ -8,6 +8,7 @@ urlpatterns = [
     path('health/', views.health, name='health'),
     path('', views.dashboard, name='dashboard'),
     path('login/', views.login_view, name='login'),
+    path('guest/', survey_views.guest_home, name='guest_home'),
     path('survey/', survey_views.survey_public, name='survey_public'),
     path('surveys/analytics/', survey_views.survey_dashboard, name='survey_dashboard'),
     path('surveys/<int:pk>/pdf/', survey_views.survey_pdf, name='survey_pdf'),

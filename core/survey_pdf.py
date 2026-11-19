@@ -76,7 +76,9 @@ def build_survey_pdf(campaign, data):
     if logo.is_file():
         story.append(Image(str(logo), width=54, height=54, hAlign='LEFT'))
     story += [p('ЦЯМиО · Профессиональное благополучие', 'Title'), p(campaign.title, 'Heading2')]
-    story += [p(f'Сформировано: {timezone.localtime():%d.%m.%Y %H:%M}. Начало опроса: {campaign.opens_on:%d.%m.%Y}.'), p(f'Получено анкет: {data["count"]}. Численность аудитории: {campaign.audience_size or "не задана"}.'), p(f'Отношение количества анкет к численности аудитории: {str(data["response_ratio"]) + "%" if data["response_ratio"] is not None else "не рассчитано"}.'), p('Анкетирование добровольное и анонимное. Одна анкета не подтверждает личность сотрудника; число анкет не является проверенным числом уникальных сотрудников.'), Spacer(1, 14)]
+    if data.get('period_label'):
+        story += [p(data['period_label'], 'Heading2'), p(f'Период отчёта: {data["date_from"]:%d.%m.%Y} — {data["date_to"]:%d.%m.%Y}.')]
+    story += [p(f'Сформировано: {timezone.localtime():%d.%m.%Y %H:%M}.'), p(f'Получено анкет: {data["count"]}. Численность аудитории: {campaign.audience_size or "не задана"}.'), p(f'Отношение количества анкет к численности аудитории: {str(data["response_ratio"]) + "%" if data["response_ratio"] is not None else "не рассчитано"}.'), p('Анкетирование добровольное и анонимное. Одна анкета не подтверждает личность сотрудника; число анкет не является проверенным числом уникальных сотрудников.'), Spacer(1, 14)]
     if not data['visible']:
         story += [p('Недостаточно ответов для публикации показателей', 'Heading2'), p(f'Показатели доступны после получения как минимум {data["minimum_group"]} анкет. Индивидуальные ответы не включаются в отчёт.')]
     else:
@@ -116,7 +118,7 @@ def build_survey_pdf(campaign, data):
 
     def footer(canvas, document):
         canvas.setFont('Cyamio', 8)
-        canvas.drawString(42, 22, 'ЦЯМиО · Анонимный опрос · Обобщённые результаты')
+        canvas.drawString(42, 22, 'ЦЯМиО · ' + data.get('period_label', 'Анонимный опрос · Обобщённые результаты'))
         canvas.drawRightString(A4[0] - 42, 22, str(document.page))
 
     doc.build(story, onFirstPage=footer, onLaterPages=footer)
