@@ -9,7 +9,7 @@
   <a class="btn secondary" href="{% url 'directions' %}">Открыть все материалы</a>
 </div>
 
-<nav class="tabs" aria-label="Разделы назначенных курсов">
+<nav class="tabs" style="flex-wrap:wrap" aria-label="Разделы назначенных курсов">
   <a class="tab-link{% if selected_tab == 'active' %} active{% endif %}" href="{% url 'courses' %}">
     <span>К прохождению</span><span class="nav-count">{{ active_count }}</span>
   </a>
