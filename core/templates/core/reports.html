@@ -2,7 +2,7 @@
 {% block content %}
 <div class="topline">
   <div><h1>Отчёты об обучении</h1><p class="muted">Оценки, даты и статусы хранятся в отдельных полях и доступны для сортировки и расчётов.</p></div>
-  <a class="btn" href="{% url 'report_excel' %}?{{ request.GET.urlencode }}">Скачать Excel</a>
+  <div class="actions"><a class="btn secondary" href="{% url 'assignment_analytics' %}">Аналитика назначений</a><a class="btn" href="{% url 'report_excel' %}?{{ request.GET.urlencode }}">Скачать Excel</a></div>
 </div>
 
 <div class="tabs">

@@ -1,6 +1,6 @@
 {% extends 'core/base.html' %}
 {% block content %}
-<div class="topline"><div><h1>Назначение обучения</h1><p class="muted">Выберите категорию, отделение и/или отдельных сотрудников.</p></div><a class="btn secondary" href="{% url 'course_manage' %}">К списку курсов</a></div>
+<div class="topline"><div><h1>Назначение обучения</h1><p class="muted">Выберите категорию, отделение и/или отдельных сотрудников.</p></div><div class="actions"><a class="btn" href="{% url 'assignment_analytics' %}">Аналитика назначений</a><a class="btn secondary" href="{% url 'course_manage' %}">К списку курсов</a></div></div>
 <form class="card" method="post" action="{% url 'assignment_new' %}">{% csrf_token %}
   <div class="form-grid">
     <div><label>Курс</label><select name="course" required>{% for c in courses %}<option value="{{ c.id }}" {% if selected_course == c.id|stringformat:'s' %}selected{% endif %}>{{ c.direction }} — {{ c.title }}</option>{% endfor %}</select></div>
@@ -43,7 +43,7 @@
   {% for a in assignments %}<tr>
     <td>{{ a.id }}</td>
     <td>{{ a.user.get_full_name|default:a.user.username }}</td>
-    <td>{{ a.course.title }}</td>
+    <td>{{ a.course.title }}{% if a.status != 'CANCELLED' %}<br><a href="{% url 'assignment_analytics' %}?{% if a.batch_key %}batch={{ a.batch_key }}{% else %}batch=legacy:{{ a.course_id }}:{{ a.assigned_at|date:'Y-m-d' }}{% endif %}">Аналитика назначения</a>{% endif %}</td>
     <td>{{ a.deadline|date:'d.m.Y H:i' }}</td>
     <td>{{ a.passing_score }}% / {{ a.attempts_allowed }}<br><small class="muted">использовано: {{ a.attempts.count }}</small></td>
     <td>{{ a.get_status_display }}{% if a.cancelled_at %}<br><small class="muted">{{ a.cancelled_at|date:'d.m.Y H:i' }}</small>{% endif %}</td>

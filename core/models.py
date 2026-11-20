@@ -197,6 +197,7 @@ class Assignment(models.Model):
     user = models.ForeignKey(User, on_delete=models.PROTECT, related_name='assignments')
     course = models.ForeignKey(Course, on_delete=models.PROTECT, related_name='assignments')
     test_version = models.ForeignKey(Test, null=True, blank=True, on_delete=models.PROTECT, related_name='assignments')
+    batch_key = models.UUIDField('Группа назначения', null=True, blank=True, db_index=True, editable=False)
     due_date = models.DateField('Срок прохождения')
     due_time = models.TimeField('Время окончания', null=True, blank=True)
     passing_score = models.PositiveSmallIntegerField('Порог прохождения, %', default=80)

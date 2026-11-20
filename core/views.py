@@ -3,6 +3,7 @@ from io import BytesIO
 from pathlib import Path
 import random
 import re
+import uuid
 from urllib.parse import urlparse
 
 from django.conf import settings
@@ -1120,10 +1121,18 @@ def assignment_list(request):
 def create_assignment(request):
     if not can_manage(request.user): return deny(request.user)
     if request.method!='POST': return redirect('assignments')
-    course=get_object_or_404(Course,pk=request.POST['course']); test=current_test(course,True)
+    try:
+        course_id = int(request.POST.get('course', ''))
+        due = datetime.strptime(request.POST.get('due_date', ''), '%Y-%m-%d').date()
+        due_time = datetime.strptime(request.POST.get('due_time') or '23:59', '%H:%M').time()
+        passing_score = int(request.POST.get('passing_score', ''))
+        attempts_allowed = int(request.POST.get('attempts_allowed', ''))
+        if not 1 <= passing_score <= 100 or not 1 <= attempts_allowed <= 32767:
+            raise ValueError
+    except (ValueError, TypeError):
+        return HttpResponse('Проверьте курс, срок, порог (1–100%) и количество попыток (1–32767).', status=400)
+    course=get_object_or_404(Course,pk=course_id,active=True); test=current_test(course,True)
     if not test: return HttpResponse('Сначала опубликуйте итоговый тест курса.',status=409)
-    due=datetime.strptime(request.POST['due_date'],'%Y-%m-%d').date()
-    due_time=datetime.strptime(request.POST.get('due_time') or '23:59','%H:%M').time()
     requested_user_ids = [value for value in request.POST.getlist('users') if value.isdigit()]
     # The browser list and the server use the same source of truth.  A modified
     # POST therefore cannot assign a course to an inactive account or a user
@@ -1135,19 +1144,26 @@ def create_assignment(request):
     )
     department_ids=request.POST.getlist('departments')
     employee_type_ids=request.POST.getlist('employee_types')
+    if any(not value.isdigit() for value in department_ids + employee_type_ids):
+        return HttpResponse('Некорректная аудитория назначения.', status=400)
     audience = Profile.objects.filter(user__is_active=True)
     if department_ids: audience = audience.filter(department_id__in=department_ids)
     if employee_type_ids: audience = audience.filter(employee_type_id__in=employee_type_ids)
     if department_ids or employee_type_ids:
         user_ids.update(audience.values_list('user_id',flat=True))
     if not user_ids: return HttpResponse('Выберите хотя бы одну категорию, отделение или сотрудника.',status=400)
-    values={'due_date':due,'due_time':due_time,'passing_score':int(request.POST['passing_score']),'attempts_allowed':int(request.POST['attempts_allowed']),'test_version':test}
-    for user_id in user_ids:
+    values={'due_date':due,'due_time':due_time,'passing_score':passing_score,'attempts_allowed':attempts_allowed,'test_version':test}
+    batch_key = uuid.uuid4()
+    with transaction.atomic():
+        Course.objects.select_for_update().get(pk=course.pk)
         Assignment.objects.filter(
-            user_id=user_id, course=course,
+            user_id__in=user_ids, course=course,
             status__in=ACTIVE_ASSIGNMENT_STATUSES,
         ).update(status='REASSIGNED')
-        Assignment.objects.create(user_id=user_id,course=course,**values)
+        Assignment.objects.bulk_create([
+            Assignment(user_id=user_id, course=course, batch_key=batch_key, **values)
+            for user_id in sorted(user_ids)
+        ])
     AuditLog.objects.create(user=request.user,action='Назначено обучение',object_label=course.title); return redirect('assignments')
 
 
