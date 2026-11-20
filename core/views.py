@@ -27,7 +27,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from .models import (Assignment, AuditLog, Course, Department, EmployeeType,
                      InternalDocument, Lesson, PasswordResetRequest, Profile, QualityDirection,
                      QualityRequirement, Question, Test, TestAttempt)
-from .assignment_queries import pending_course_assignments
+from .assignment_queries import latest_course_assignments, pending_course_assignments
 
 
 MAX_UPLOAD_SIZE = 15 * 1024 * 1024
@@ -321,20 +321,33 @@ def courses(request):
     assignments = Assignment.objects.filter(
         user=request.user,
         course__active=True,
-    ).select_related('course', 'course__direction', 'test_version').prefetch_related('attempts')
+    ).select_related('course', 'course__direction', 'test_version').prefetch_related(
+        Prefetch('attempts', queryset=TestAttempt.objects.defer('answers_snapshot').order_by('number')),
+    )
     for assignment in assignments:
         if assignment.status == 'COMPLETED' and assignment.test_version_id:
             latest_completed_by_course.setdefault(assignment.course_id, assignment)
 
-    active_assignments = []
-    current = pending_course_assignments(request.user).select_related(
+    ready_ids = set(pending_course_assignments(request.user).values_list('id', flat=True))
+    active_assignments, unavailable_assignments = [], []
+    current = latest_course_assignments(request.user).filter(
+        status__in=('ASSIGNED', 'IN_PROGRESS', 'OVERDUE', 'FAILED'), test_version__isnull=False,
+    ).select_related(
         'course', 'course__direction', 'test_version',
-    ).prefetch_related('attempts')
+    ).prefetch_related(Prefetch('attempts', queryset=TestAttempt.objects.defer('answers_snapshot').order_by('number')))
     for assignment in current:
         attempts = list(assignment.attempts.all())
         assignment.latest_attempt = attempts[-1] if attempts else None
-        assignment.display_status = 'Просрочено' if assignment.is_overdue else assignment.get_status_display()
-        active_assignments.append(assignment)
+        if assignment.pk in ready_ids:
+            assignment.display_status = 'В процессе' if assignment.status == 'IN_PROGRESS' else 'Назначено'
+            active_assignments.append(assignment)
+        else:
+            assignment.display_status = (
+                'Срок истёк' if assignment.is_overdue else
+                'Попытки исчерпаны' if len(attempts) >= assignment.attempts_allowed or assignment.status == 'FAILED' else
+                'Тест недоступен'
+            )
+            unavailable_assignments.append(assignment)
     completed_assignments = []
     for assignment in latest_completed_by_course.values():
         attempts = list(assignment.attempts.all())
@@ -343,13 +356,17 @@ def courses(request):
         completed_assignments.append(assignment)
     active_assignments.sort(key=lambda item: item.course.title.casefold())
     completed_assignments.sort(key=lambda item: item.course.title.casefold())
-    selected_tab = 'completed' if request.GET.get('tab') == 'completed' else 'active'
-    my_assignments = completed_assignments if selected_tab == 'completed' else active_assignments
+    unavailable_assignments.sort(key=lambda item: item.course.title.casefold())
+    selected_tab = request.GET.get('tab', 'active')
+    if selected_tab not in ('active', 'completed', 'unavailable'):
+        selected_tab = 'active'
+    my_assignments = {'active': active_assignments, 'completed': completed_assignments, 'unavailable': unavailable_assignments}[selected_tab]
     return render(request, 'core/courses.html', {
         'my_assignments': my_assignments,
         'selected_tab': selected_tab,
         'active_count': len(active_assignments),
         'completed_count': len(completed_assignments),
+        'unavailable_count': len(unavailable_assignments),
     })
 
 
@@ -548,20 +565,31 @@ def course_detail(request, pk):
         ),
         pk=pk,
     )
-    assignments = Assignment.objects.filter(course=course, user=request.user).prefetch_related('attempts')
-    assignment = (
-        assignments.filter(status__in=ACTIVE_ASSIGNMENT_STATUSES).first()
-        or assignments.exclude(status__in=('CANCELLED', 'REASSIGNED')).first()
+    assignments = Assignment.objects.filter(course=course, user=request.user).select_related('test_version').prefetch_related(
+        Prefetch('attempts', queryset=TestAttempt.objects.defer('answers_snapshot').order_by('number')),
     )
-    test = assignment.test_version if assignment and assignment.test_version_id else current_test(course, True)
-    return render(request, 'core/course.html', {'course': course, 'assignment': assignment, 'test': test})
+    latest = assignments.first()
+    assignment = latest
+    if request.GET.get('assignment'):
+        try:
+            requested_id = int(request.GET['assignment'])
+        except (TypeError, ValueError):
+            raise Http404
+        assignment = get_object_or_404(assignments, pk=requested_id)
+    test = assignment.test_version if assignment and assignment.test_version_id else None
+    attempts = list(assignment.attempts.all()) if assignment else []
+    return render(request, 'core/course.html', {
+        'course': course, 'assignment': assignment, 'test': test,
+        'last_attempt': attempts[-1] if attempts else None,
+        'assignment_is_current': bool(assignment and latest and assignment.pk == latest.pk),
+    })
 
 
 @login_required
 def acknowledge(request, pk):
     assignment = get_object_or_404(Assignment, pk=pk, user=request.user)
     if request.method == 'POST':
-        if assignment.status not in ACTIVE_ASSIGNMENT_STATUSES:
+        if assignment.status not in ACTIVE_ASSIGNMENT_STATUSES or not latest_course_assignments(request.user).filter(pk=pk).exists():
             messages.error(request, 'Назначение больше не активно.')
             return redirect('course', pk=assignment.course_id)
         if assignment.is_overdue:
@@ -569,17 +597,18 @@ def acknowledge(request, pk):
                 assignment.status = 'OVERDUE'; assignment.save(update_fields=['status'])
             messages.error(request, 'Срок прохождения курса истёк. Обратитесь к методисту для нового назначения.')
             return redirect('course', pk=assignment.course_id)
-        assignment.acknowledged_at = timezone.now(); assignment.status = 'IN_PROGRESS'; assignment.save()
+        changed = latest_course_assignments(request.user).filter(pk=pk, status__in=ACTIVE_ASSIGNMENT_STATUSES).update(
+            acknowledged_at=timezone.now(), status='IN_PROGRESS',
+        )
+        if not changed:
+            return redirect('course', pk=assignment.course_id)
         AuditLog.objects.create(user=request.user, action='Начато обучение', object_label=assignment.course.title)
     return redirect('course', pk=assignment.course_id)
 
 
 def test_assignment(course, user):
-    assignments = Assignment.objects.filter(course=course, user=user)
-    return (
-        assignments.filter(status__in=ACTIVE_ASSIGNMENT_STATUSES).first()
-        or assignments.exclude(status__in=('CANCELLED', 'REASSIGNED')).first()
-    )
+    # Do not resurrect an older active cycle after a newer completion/cancellation.
+    return Assignment.objects.filter(course=course, user=user).select_related('test_version').first()
 
 
 def test_timer_key(assignment):
@@ -626,10 +655,10 @@ def start_test(request, pk):
         return redirect('test', pk=pk)
     course = get_object_or_404(Course, pk=pk)
     assignment = test_assignment(course, request.user)
-    if not assignment or assignment.is_overdue or assignment.status == 'COMPLETED' or assignment.attempts_left == 0:
+    if not assignment or not course.active or assignment.is_overdue or assignment.status not in ACTIVE_ASSIGNMENT_STATUSES or assignment.attempts_left == 0:
         return redirect('course', pk=pk)
-    test = assignment.test_version or current_test(course, True)
-    if not test:
+    test = assignment.test_version
+    if not test or test.status != 'PUBLISHED':
         return HttpResponse('Итоговый тест ещё не опубликован.', status=409)
     started_at = assignment.current_attempt_started_at
     if started_at and test_seconds_left(test, started_at) == 0:
@@ -648,13 +677,17 @@ def take_test(request, pk):
     course = get_object_or_404(Course, pk=pk)
     assignment = test_assignment(course, request.user)
     if not assignment: return deny(request.user)
+    if assignment.status in ('CANCELLED', 'REASSIGNED'):
+        return deny(request.user)
+    if not course.active or assignment.status not in ACTIVE_ASSIGNMENT_STATUSES:
+        return redirect('course', pk=pk)
     if assignment.is_overdue:
         if assignment.status != 'OVERDUE':
             assignment.status = 'OVERDUE'; assignment.save(update_fields=['status'])
         messages.error(request, 'Срок теста истёк. Прохождение заблокировано.')
         return redirect('course', pk=pk)
-    test = assignment.test_version or current_test(course, True)
-    if not test: return HttpResponse('Итоговый тест ещё не опубликован.', status=409)
+    test = assignment.test_version
+    if not test or test.status != 'PUBLISHED': return HttpResponse('Итоговый тест ещё не опубликован.', status=409)
     if assignment.status == 'COMPLETED' or assignment.attempts_left == 0: return redirect('course', pk=pk)
     started_at = test_started_at(request, assignment)
     if not started_at:

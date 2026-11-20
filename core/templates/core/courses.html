@@ -4,7 +4,7 @@
 <div class="topline">
   <div>
     <h1>Назначенные курсы</h1>
-    <p class="muted">Текущие назначения и завершённое обучение разделены по вкладкам.</p>
+    <p class="muted">К прохождению — только открытые тесты с доступными попытками. Завершённые и недоступные назначения находятся отдельно.</p>
   </div>
   <a class="btn secondary" href="{% url 'directions' %}">Открыть все материалы</a>
 </div>
@@ -16,7 +16,11 @@
   <a class="tab-link{% if selected_tab == 'completed' %} active{% endif %}" href="{% url 'courses' %}?tab=completed">
     <span>Пройденные</span><span class="nav-count">{{ completed_count }}</span>
   </a>
+  <a class="tab-link{% if selected_tab == 'unavailable' %} active{% endif %}" href="{% url 'courses' %}?tab=unavailable">
+    <span>Не завершены</span><span class="nav-count">{{ unavailable_count }}</span>
+  </a>
 </nav>
+{% if selected_tab == 'unavailable' %}<div class="card"><p class="muted">Здесь назначения с истёкшим сроком, исчерпанными попытками или недоступным тестом. Они не входят в колокольчик. Для повторного допуска обратитесь к методисту; материалы можно изучать.</p></div>{% endif %}
 
 <div class="grid">
   {% for assignment in my_assignments %}
@@ -33,14 +37,18 @@
     </p>
     {% if assignment.latest_attempt %}
       <p>Последний результат: <strong>{{ assignment.latest_attempt.score }}%</strong></p>
+      <p class="muted">Дата результата: {{ assignment.latest_attempt.completed_at|date:'d.m.Y H:i' }}</p>
     {% endif %}
-    <a class="btn" href="{% url 'course' assignment.course_id %}">Перейти к курсу</a>
+    <a class="btn" href="{% url 'course' assignment.course_id %}?assignment={{ assignment.id }}">{% if selected_tab == 'completed' %}Посмотреть результат и материалы{% else %}Перейти к курсу{% endif %}</a>
   </article>
   {% empty %}
   <div class="card">
     {% if selected_tab == 'completed' %}
       <h2>Пройденных курсов пока нет</h2>
       <p class="muted">После успешного завершения курс появится на этой вкладке.</p>
+    {% elif selected_tab == 'unavailable' %}
+      <h2>Незавершённых закрытых назначений нет</h2>
+      <p class="muted">Здесь появятся назначения с истёкшим сроком или исчерпанными попытками.</p>
     {% else %}
       <h2>Курсов к прохождению пока нет</h2>
       <p class="muted">Когда вам назначат курс с итоговым тестом, он появится в этом разделе.</p>

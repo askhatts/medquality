@@ -591,10 +591,12 @@ class LearningPortalTests(TestCase):
                     due_date=timezone.localdate() + timedelta(days=3), status=status,
                 )
                 response = self.client.get(reverse('courses'))
-                self.assertEqual(response.context['notification_count'], 1)
-                self.assertEqual(response.context['active_count'], 1)
+                expected = 0 if status == 'FAILED' else 1
+                self.assertEqual(response.context['notification_count'], expected)
+                self.assertEqual(response.context['active_count'], expected)
+                self.assertEqual(response.context['unavailable_count'], int(status == 'FAILED'))
         # The counter is present on other pages, not only the courses page.
-        self.assertEqual(self.client.get(reverse('directions')).context['notification_count'], 1)
+        self.assertEqual(self.client.get(reverse('directions')).context['notification_count'], 0)
 
     def test_google_drive_material_is_embedded_and_opens_in_new_tab(self):
         lesson = Lesson.objects.create(
@@ -1081,7 +1083,7 @@ class LearningPortalTests(TestCase):
         self.assignment.refresh_from_db()
         self.assertEqual(self.assignment.status, 'CANCELLED')
         course_page = self.client.get(reverse('course', args=[self.course.id]))
-        self.assertContains(course_page, 'Тест открывается после назначения курса')
+        self.assertContains(course_page, 'Назначение отменено')
         self.assertEqual(self.client.get(reverse('test', args=[self.course.id])).status_code, 403)
 
     def test_completed_assignment_cannot_be_edited_or_cancelled(self):
