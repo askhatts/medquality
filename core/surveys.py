@@ -11,6 +11,7 @@ from django import forms
 from django.utils import timezone
 
 from .models import SurveyCampaign
+from .survey_comments import EXPORT_NOTICE, grouped_comments
 
 MIN_GROUP = 5
 AGREEMENT = ['Категорически не согласен(на)', 'Не согласен(на)', 'Нейтрально / затрудняюсь ответить', 'Согласен(на)', 'Полностью согласен(на)']
@@ -60,9 +61,9 @@ class WellbeingForm(forms.Form):
     comment = forms.CharField(
         label='14. Какие факторы чаще всего вызывают у Вас профессиональное напряжение? Какие изменения в организации работы ЦЯМиО могли бы улучшить условия труда?',
         required=False, max_length=2000, widget=forms.Textarea(attrs={'rows': 4}),
-        help_text='Не указывайте ФИО, контакты и другие сведения, позволяющие установить личность.',
+        help_text='Не указывайте ФИО, контакты и другие сведения, позволяющие установить личность. Обезличенные предложения могут включаться в закрытый отчёт сисадмина без связи с баллами анкеты.',
     )
-    consent = forms.BooleanField(label='Я добровольно участвую в анонимном опросе и согласен(на) с обработкой ответов в обобщённом виде.')
+    consent = forms.BooleanField(label='Я добровольно участвую в анонимном опросе и согласен(на) с обработкой ответов в обобщённом виде, включая подборку обезличенных текстовых предложений.')
     receipt = forms.CharField(widget=forms.HiddenInput)
     website = forms.CharField(required=False, widget=forms.HiddenInput)
 
@@ -188,7 +189,7 @@ def selected_halfyear(value=None, *, year=None, half=None):
     return year, half
 
 
-def survey_analytics(campaign, year=None, half=None):
+def survey_analytics(campaign, year=None, half=None, *, include_comments=False):
     queryset = campaign.responses.all()
     period = {}
     if year is not None and half is not None:
@@ -210,8 +211,15 @@ def survey_analytics(campaign, year=None, half=None):
     data['questions'] = []
     data['extra'] = []
     data['themes'] = []
+    data['comments_included'] = include_comments
+    data['comments'] = []
+    data['comments_notice'] = EXPORT_NOTICE
+    data['comments_count'] = 0
     if not data['visible']:
         return data
+    data['comments_count'] = sum(bool(r.comment.strip()) for r in responses)
+    if include_comments:
+        data['comments'] = grouped_comments(responses)
     for i, (label, options) in enumerate(QUESTIONS):
         counts = Counter(r.answers[i] for r in responses)
         data['questions'].append({

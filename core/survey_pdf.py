@@ -12,7 +12,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import Image, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 FONT_LOCK = Lock()
 
@@ -110,6 +110,16 @@ def build_survey_pdf(campaign, data):
         story.extend(p(f'{theme["label"]}: {theme["count"]}') for theme in data['themes'])
         if not data['themes']:
             story.append(p('Тем с достаточным количеством упоминаний пока нет.'))
+        if data.get('comments_included'):
+            story += [PageBreak(), p('Обезличенные текстовые предложения', 'Heading2'),
+                      p('Ответы на открытый вопрос 14. Доступ только сисадмину.'),
+                      p(data['comments_notice']),
+                      p(f'Текстовых ответов за выбранное полугодие: {data["comments_count"]}.'),
+                      Spacer(1, 12)]
+            for comment in data['comments']:
+                story += [p(comment['text']), p(f'Повторений: {comment["count"]}'), Spacer(1, 12)]
+            if not data['comments']:
+                story.append(p('Текстовых предложений за выбранный период нет.'))
     story += [Spacer(1, 15), p('Методика расчёта', 'Heading2'), p('Источник: «Анкета Mini-Z — адаптация ЦЯМиО», рабочая версия 2026 года. Сумма вопросов 1–10: 10–50; вопросы 1–5 и 6–10: по 5–25. Баллы суммируются в исходном виде, без дополнительного обратного кодирования. Доля признаков выгорания: ответы 1–3 на вопрос 2 / число ответивших × 100%. Вопросы 11–14 не включаются в подсчёт. Результат не является медицинским диагнозом.'), p('Обобщённые показатели публикуются после получения не менее пяти анкет за выбранный период. В отчёте нет разбивки по сотрудникам, ФИО, логинов и индивидуальных анкет.')]
 
     def footer(canvas, document):

@@ -1,4 +1,5 @@
 import uuid
+from io import BytesIO
 from urllib.parse import urlencode
 
 from django.contrib import messages
@@ -12,6 +13,8 @@ from django.utils import timezone
 from django.views.decorators.cache import never_cache
 from django.views.decorators.debug import sensitive_post_parameters
 from django.views.decorators.http import require_http_methods
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Font
 
 from .models import AuditLog, SurveyCampaign, SurveyResponse
 from .surveys import CampaignSettingsForm, WellbeingForm, burnout_self_assessment, halfyear_bounds, halfyear_options, selected_halfyear, survey_analytics
@@ -179,6 +182,60 @@ def survey_pdf(request, pk):
     except ValueError as error:
         return HttpResponseBadRequest(str(error))
     from .survey_pdf import build_survey_pdf
-    response = HttpResponse(build_survey_pdf(campaign, survey_analytics(campaign, year, half)), content_type='application/pdf')
-    response['Content-Disposition'] = f'attachment; filename="wellbeing-{year}-H{half}.pdf"'
+    include_comments = request.GET.get('comments') == '1'
+    data = survey_analytics(campaign, year, half, include_comments=include_comments)
+    response = HttpResponse(build_survey_pdf(campaign, data), content_type='application/pdf')
+    suffix = '-suggestions' if include_comments else ''
+    response['Content-Disposition'] = f'attachment; filename="wellbeing-{year}-H{half}{suffix}.pdf"'
+    return response
+
+
+@login_required
+@never_cache
+@require_http_methods(['GET'])
+def survey_comments_excel(request, pk):
+    if not admin_only(request.user):
+        return HttpResponseForbidden('Раздел доступен только сисадмину.')
+    campaign = get_object_or_404(SurveyCampaign, pk=pk)
+    try:
+        year, half, _ = report_period(request.GET)
+    except ValueError as error:
+        return HttpResponseBadRequest(str(error))
+    data = survey_analytics(campaign, year, half, include_comments=True)
+    book = Workbook()
+    sheet = book.active
+    sheet.title = 'Текстовые предложения'
+    sheet.append(['Обезличенный текст', 'Повторений'])
+    for comment in data['comments']:
+        text = comment['text']
+        # This is an XLSX text cell, not an executable Excel formula.
+        if text.startswith(('=', '+', '-', '@')):
+            text = "'" + text
+        sheet.append([text, comment['count']])
+    sheet.freeze_panes = 'A2'
+    sheet.auto_filter.ref = sheet.dimensions
+    sheet.column_dimensions['A'].width = 110
+    sheet.column_dimensions['B'].width = 16
+    for row in sheet:
+        row[0].alignment = Alignment(wrap_text=True, vertical='top')
+    for cell in sheet[1]:
+        cell.font = Font(bold=True)
+    notes = book.create_sheet('Описание')
+    notes.append(['Параметр', 'Значение'])
+    for label, value in [
+        ('Период', f'{year} год, {half} полугодие'),
+        ('Получено анкет', data['count']),
+        ('Получено текстовых ответов', data['comments_count'] if data['visible'] else 'Скрыто: менее пяти анкет'),
+        ('Защита анонимности', data['comments_notice']),
+        ('Порог публикации', f'Не менее {data["minimum_group"]} анкет за выбранный период'),
+    ]:
+        notes.append([label, value])
+    notes.column_dimensions['A'].width = 32
+    notes.column_dimensions['B'].width = 110
+    for row in notes:
+        row[1].alignment = Alignment(wrap_text=True)
+    output = BytesIO()
+    book.save(output)
+    response = HttpResponse(output.getvalue(), content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    response['Content-Disposition'] = f'attachment; filename="wellbeing-{year}-H{half}-suggestions.xlsx"'
     return response

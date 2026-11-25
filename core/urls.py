@@ -13,6 +13,7 @@ urlpatterns = [
     path('survey/', survey_views.survey_public, name='survey_public'),
     path('surveys/analytics/', survey_views.survey_dashboard, name='survey_dashboard'),
     path('surveys/<int:pk>/pdf/', survey_views.survey_pdf, name='survey_pdf'),
+    path('surveys/<int:pk>/suggestions/excel/', survey_views.survey_comments_excel, name='survey_comments_excel'),
     path('password/forgot/', views.forgot_password, name='forgot_password'),
     path('logout/', views.logout_view, name='logout'),
     path('session/ping/', views.session_ping, name='session_ping'),
