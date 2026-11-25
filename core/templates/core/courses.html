@@ -35,9 +35,10 @@
       <strong>Тест:</strong> {{ assignment.test_version.title }}<br>
       <span class="muted">Срок: {{ assignment.deadline|date:'d.m.Y H:i' }} · порог {{ assignment.passing_score }}% · попыток {{ assignment.attempts_allowed }}</span>
     </p>
-    {% if assignment.latest_attempt %}
-      <p>Последний результат: <strong>{{ assignment.latest_attempt.score }}%</strong></p>
-      <p class="muted">Дата результата: {{ assignment.latest_attempt.completed_at|date:'d.m.Y H:i' }}</p>
+    {% if assignment.reported_result.score is not None %}
+      <p>Последний результат: <strong>{{ assignment.reported_result.score }}%</strong></p>
+      {% if assignment.reported_result.result_at %}<p class="muted">Дата результата: {{ assignment.reported_result.result_at|date:'d.m.Y H:i' }}</p>{% endif %}
+      {% if assignment.reported_result.recovered %}<p class="muted">Восстановлено администратором · внесено {{ assignment.reported_result.recorded_at|date:'d.m.Y H:i' }}. Детальные ответы не восстановлены.</p>{% endif %}
     {% endif %}
     <a class="btn" href="{% url 'course' assignment.course_id %}?assignment={{ assignment.id }}">{% if selected_tab == 'completed' %}Посмотреть результат и материалы{% else %}Перейти к курсу{% endif %}</a>
   </article>

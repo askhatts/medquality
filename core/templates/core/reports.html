@@ -51,7 +51,7 @@
   </tr></thead><tbody>{% for row in course_rows %}<tr>
     <td><b>{{ row.user.get_full_name|default:row.user.username }}</b><br><small>{{ row.user.username }}</small></td><td>{{ row.profile.employee_type|default:'—' }}</td><td>{{ row.profile.department|default:'—' }}</td>
     <td>{{ row.assignment.assigned_at|date:'d.m.Y H:i' }}</td><td>{{ row.assignment.deadline|date:'d.m.Y H:i' }}</td><td><span class="badge">{{ row.status_label }}</span></td>
-    <td>{% if row.score is not None %}<b>{{ row.score }}%</b>{% else %}—{% endif %}</td><td>{% if row.result_at %}{{ row.result_at|date:'d.m.Y H:i' }}{% else %}—{% endif %}</td><td>{{ row.attempts_used }} / {{ row.assignment.attempts_allowed }}</td>
+    <td>{% if row.score is not None %}<b>{{ row.score }}%</b>{% else %}—{% endif %}{% include 'core/result_source.html' %}</td><td>{% if row.result_at %}{{ row.result_at|date:'d.m.Y H:i' }}{% else %}—{% endif %}</td><td>{{ row.attempts_used }} / {{ row.assignment.attempts_allowed }}</td>
   </tr>{% empty %}<tr><td colspan="9">По выбранным фильтрам результатов нет.</td></tr>{% endfor %}</tbody></table></div>
   {% else %}<div class="card"><p>Назначений по выбранным фильтрам пока нет.</p></div>{% endif %}
 
@@ -69,7 +69,7 @@
   </div>
   <div class="card" style="overflow-x:auto"><table><thead><tr><th>Сотрудник</th><th>Отделение</th>{% for course in matrix_courses %}<th>{{ course.title }}</th>{% endfor %}<th>Средний балл</th></tr></thead><tbody>{% for row in matrix_rows %}<tr>
     <td><b>{{ row.user.get_full_name|default:row.user.username }}</b><br><small>{{ row.user.username }} · {{ row.profile.employee_type|default:'—' }}</small></td><td>{{ row.profile.department|default:'—' }}</td>
-    {% for cell in row.cells %}<td>{% if cell %}{% if cell.score is not None %}<b>{{ cell.score }}%</b><br>{% endif %}<small>{{ cell.status_label }}</small>{% else %}—{% endif %}</td>{% endfor %}<td>{% if row.average is not None %}<b>{{ row.average }}%</b>{% else %}—{% endif %}</td>
+    {% for cell in row.cells %}<td>{% if cell %}{% if cell.score is not None %}<b>{{ cell.score }}%</b><br>{% endif %}<small>{{ cell.status_label }}</small>{% include 'core/result_source.html' with row=cell %}{% else %}—{% endif %}</td>{% endfor %}<td>{% if row.average is not None %}<b>{{ row.average }}%</b>{% else %}—{% endif %}</td>
   </tr>{% empty %}<tr><td colspan="20">По выбранным фильтрам результатов нет.</td></tr>{% endfor %}</tbody></table></div>
   <div class="card" style="overflow-x:auto"><h2>Аналитика по курсам</h2><table><thead><tr><th>Курс</th><th>Назначено</th><th>Ожидают</th><th>В процессе</th><th>Завершили</th><th>Не прошли</th><th>Просрочили</th><th>Средний балл</th><th>Завершение</th></tr></thead><tbody>{% for row in analytics %}<tr><td><b>{{ row.course.title }}</b></td><td>{{ row.total }}</td><td>{{ row.assigned }}</td><td>{{ row.in_progress }}</td><td>{{ row.completed }}</td><td>{{ row.failed }}</td><td>{{ row.overdue }}</td><td>{% if row.average is not None %}{{ row.average }}%{% else %}—{% endif %}</td><td>{{ row.completion_rate }}%</td></tr>{% empty %}<tr><td colspan="9">Нет данных.</td></tr>{% endfor %}</tbody></table></div>
 
@@ -85,7 +85,7 @@
     <th><a href="?{% if base_query %}{{ base_query }}&{% endif %}view=history&sort=completed&order={% if sort == 'completed' and order == 'asc' %}desc{% else %}asc{% endif %}">Дата результата</a></th><th>Попытки</th><th>Порог</th>
   </tr></thead><tbody>{% for row in history_rows %}<tr>
     <td><b>{{ row.user.get_full_name|default:row.user.username }}</b><br><small>{{ row.user.username }} · {{ row.profile.department|default:'—' }}</small></td><td>{{ row.course.title }}</td><td>{{ row.assignment.assigned_at|date:'d.m.Y H:i' }}</td><td>{{ row.assignment.deadline|date:'d.m.Y H:i' }}</td>
-    <td><span class="badge">{{ row.status_label }}</span></td><td>{% if row.score is not None %}<b>{{ row.score }}%</b>{% else %}—{% endif %}</td><td>{% if row.result_at %}{{ row.result_at|date:'d.m.Y H:i' }}{% else %}—{% endif %}</td><td>{{ row.attempts_used }} / {{ row.assignment.attempts_allowed }}</td><td>{{ row.assignment.passing_score }}%</td>
+    <td><span class="badge">{{ row.status_label }}</span></td><td>{% if row.score is not None %}<b>{{ row.score }}%</b>{% else %}—{% endif %}{% include 'core/result_source.html' %}</td><td>{% if row.result_at %}{{ row.result_at|date:'d.m.Y H:i' }}{% else %}—{% endif %}</td><td>{{ row.attempts_used }} / {{ row.assignment.attempts_allowed }}</td><td>{{ row.assignment.passing_score }}%</td>
   </tr>{% empty %}<tr><td colspan="9">По выбранным фильтрам записей нет.</td></tr>{% endfor %}</tbody></table></div>
 {% endif %}
 {% endblock %}

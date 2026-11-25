@@ -28,6 +28,7 @@ from .models import (Assignment, AuditLog, Course, Department, EmployeeType,
                      InternalDocument, Lesson, PasswordResetRequest, Profile, QualityDirection,
                      QualityRequirement, Question, Test, TestAttempt)
 from .assignment_queries import latest_course_assignments, pending_course_assignments
+from .learning_results import learning_result
 
 
 MAX_UPLOAD_SIZE = 15 * 1024 * 1024
@@ -186,7 +187,7 @@ def change_password(request):
 def visible_assignments(user):
     qs = Assignment.objects.select_related(
         'user', 'user__profile', 'user__profile__department',
-        'user__profile__employee_type', 'course', 'course__direction', 'test_version',
+        'user__profile__employee_type', 'course', 'course__direction', 'test_version', 'recovered_result',
     ).prefetch_related(Prefetch('attempts', queryset=TestAttempt.objects.defer('answers_snapshot').order_by('number')))
     if role_in(user, 'ADMIN', 'METHODIST'): return qs
     if is_head(user): return qs.filter(user__profile__department=profile(user).department)
@@ -240,6 +241,7 @@ def dashboard(request):
             'assignment': assignment,
             'status': status,
             'last_attempt': attempts[-1] if attempts else None,
+            'result': learning_result(assignment, attempts),
         })
 
     if p.role in ('ADMIN', 'METHODIST'):
@@ -321,7 +323,7 @@ def courses(request):
     assignments = Assignment.objects.filter(
         user=request.user,
         course__active=True,
-    ).select_related('course', 'course__direction', 'test_version').prefetch_related(
+    ).select_related('course', 'course__direction', 'test_version', 'recovered_result').prefetch_related(
         Prefetch('attempts', queryset=TestAttempt.objects.defer('answers_snapshot').order_by('number')),
     )
     for assignment in assignments:
@@ -333,11 +335,12 @@ def courses(request):
     current = latest_course_assignments(request.user).filter(
         status__in=('ASSIGNED', 'IN_PROGRESS', 'OVERDUE', 'FAILED'), test_version__isnull=False,
     ).select_related(
-        'course', 'course__direction', 'test_version',
+        'course', 'course__direction', 'test_version', 'recovered_result',
     ).prefetch_related(Prefetch('attempts', queryset=TestAttempt.objects.defer('answers_snapshot').order_by('number')))
     for assignment in current:
         attempts = list(assignment.attempts.all())
         assignment.latest_attempt = attempts[-1] if attempts else None
+        assignment.reported_result = learning_result(assignment, attempts)
         if assignment.pk in ready_ids:
             assignment.display_status = 'В процессе' if assignment.status == 'IN_PROGRESS' else 'Назначено'
             active_assignments.append(assignment)
@@ -352,6 +355,7 @@ def courses(request):
     for assignment in latest_completed_by_course.values():
         attempts = list(assignment.attempts.all())
         assignment.latest_attempt = attempts[-1] if attempts else None
+        assignment.reported_result = learning_result(assignment, attempts)
         assignment.display_status = assignment.get_status_display()
         completed_assignments.append(assignment)
     active_assignments.sort(key=lambda item: item.course.title.casefold())
@@ -492,7 +496,10 @@ def editable_test(course):
     test = current_test(course)
     if not test:
         return Test.objects.create(course=course, title=f'Итоговый тест: {course.title}', version=1)
-    if test.status == 'PUBLISHED' and TestAttempt.objects.filter(assignment__test_version=test).exists():
+    if test.status == 'PUBLISHED' and (
+        TestAttempt.objects.filter(assignment__test_version=test).exists()
+        or test.assignments.filter(recovered_result__isnull=False).exists()
+    ):
         with transaction.atomic():
             test.is_current = False; test.save(update_fields=['is_current'])
             clone = Test.objects.create(course=course, title=test.title, instructions=test.instructions, time_limit_minutes=test.time_limit_minutes, version=test.version + 1, status='DRAFT', is_current=True)
@@ -565,7 +572,7 @@ def course_detail(request, pk):
         ),
         pk=pk,
     )
-    assignments = Assignment.objects.filter(course=course, user=request.user).select_related('test_version').prefetch_related(
+    assignments = Assignment.objects.filter(course=course, user=request.user).select_related('test_version', 'recovered_result').prefetch_related(
         Prefetch('attempts', queryset=TestAttempt.objects.defer('answers_snapshot').order_by('number')),
     )
     latest = assignments.first()
@@ -581,6 +588,7 @@ def course_detail(request, pk):
     return render(request, 'core/course.html', {
         'course': course, 'assignment': assignment, 'test': test,
         'last_attempt': attempts[-1] if attempts else None,
+        'reported_result': learning_result(assignment, attempts) if assignment else None,
         'assignment_is_current': bool(assignment and latest and assignment.pk == latest.pk),
     })
 
@@ -1404,17 +1412,13 @@ def assignment_cancel(request, pk):
 
 def report_entry(assignment):
     attempts = list(assignment.attempts.all())
-    last_attempt = attempts[-1] if attempts else None
     status = 'OVERDUE' if assignment.is_overdue else assignment.status
     return {
         'assignment': assignment,
         'user': assignment.user,
         'profile': assignment.user.profile,
         'course': assignment.course,
-        'last_attempt': last_attempt,
-        'score': last_attempt.score if last_attempt else None,
-        'result_at': last_attempt.completed_at if last_attempt else None,
-        'attempts_used': len(attempts),
+        **learning_result(assignment, attempts),
         'status': status,
         'status_label': dict(Assignment.STATUS).get(status, status),
     }
@@ -1651,6 +1655,7 @@ def report_excel(request):
         'Сотрудник', 'Логин', 'Категория сотрудника', 'Отдел / отделение', 'Должность',
         'Курс', 'Дата назначения', 'Срок прохождения', 'Статус', 'Последняя оценка, %',
         'Дата результата', 'Использовано попыток', 'Разрешено попыток', 'Порог, %',
+        'Источник результата', 'Дата внесения восстановления',
     ])
     for entry in data['history_rows']:
         assignment = entry['assignment']
@@ -1671,6 +1676,8 @@ def report_excel(request):
             entry['attempts_used'],
             assignment.attempts_allowed,
             assignment.passing_score,
+            entry['result_source'],
+            timezone.localtime(entry['recorded_at']).replace(tzinfo=None) if entry['recorded_at'] else None,
         ])
 
     matrix = wb.create_sheet('Матрица обучения')

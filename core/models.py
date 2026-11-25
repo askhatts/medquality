@@ -232,6 +232,22 @@ class TestAttempt(models.Model):
     completed_at = models.DateTimeField('Дата прохождения', auto_now_add=True)
     class Meta: unique_together = ('assignment', 'number'); ordering = ['number']
 
+class ResultRecovery(models.Model):
+    assignment = models.OneToOneField(Assignment, on_delete=models.PROTECT, related_name='recovered_result')
+    score = models.PositiveSmallIntegerField('Восстановленная оценка, %')
+    reason = models.CharField('Основание восстановления', max_length=500)
+    recorded_at = models.DateTimeField('Внесено', auto_now_add=True)
+    recorded_by = models.ForeignKey(User, on_delete=models.PROTECT, related_name='recorded_result_recoveries')
+    previous_status = models.CharField(max_length=12)
+    previous_completed_at = models.DateTimeField(null=True, blank=True)
+    previous_attempt_started_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [models.CheckConstraint(condition=models.Q(score__lte=100), name='recovered_score_at_most_100')]
+        verbose_name = 'Восстановление результата'
+        verbose_name_plural = 'Восстановления результатов'
+
+
 class AuditLog(models.Model):
     user = models.ForeignKey(User, null=True, on_delete=models.SET_NULL)
     action = models.CharField(max_length=120)

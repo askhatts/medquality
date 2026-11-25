@@ -57,7 +57,7 @@ def summary(rows):
 def question_results(rows):
     """Only the selected event's latest attempts need the larger answer JSON."""
     attempts = {
-        row['last_attempt'].pk: row for row in rows if row['last_attempt']
+        row['last_attempt'].pk: row for row in rows if row['last_attempt'] and not row['recovered']
     }
     groups = {}
     for attempt in TestAttempt.objects.filter(pk__in=attempts).only('id', 'answers_snapshot'):
@@ -201,8 +201,9 @@ def assignment_analytics_excel(request):
         ('Назначение', data['selected']['label'] if data['selected'] else 'Нет данных'),
         ('Сформировано', timezone.now()),
         ('Отделение', 'Текущее подразделение сотрудника'),
-        ('Оценка', 'Последняя завершённая попытка выбранного назначения'),
-        ('Средний балл', 'Только сотрудники с завершённой попыткой'),
+        ('Оценка', 'Последняя сохранённая попытка либо подтверждённое администратором восстановление; источник указан на листе «Сотрудники»'),
+        ('Средний балл', 'Сотрудники с зарегистрированным результатом, включая восстановления'),
+        ('Восстановление', 'Дата внесения восстановления не является датой сдачи теста. Неизвестная дата сдачи оставлена пустой; ответы не выдумываются.'),
         ('Архив', 'Для старых записей без группы: последнее назначение сотруднику за выбранный день'),
     ])
     add_sheet(book, 'Отделения', [
@@ -215,6 +216,7 @@ def assignment_analytics_excel(request):
         'Сотрудник', 'Логин', 'Категория', 'Отделение', 'Курс', 'Версия теста',
         '№ назначения', 'Дата назначения', 'Срок', 'Статус', 'Последняя оценка, %',
         'Дата результата', 'Использовано попыток', 'Лимит попыток', 'Порог, %',
+        'Источник результата', 'Дата внесения восстановления',
     ], ([
         r['user'].get_full_name() or r['user'].username, r['user'].username,
         str(r['profile'].employee_type or ''), str(r['profile'].department or ''),
@@ -223,6 +225,7 @@ def assignment_analytics_excel(request):
         r['assignment'].pk, r['assignment'].assigned_at, r['assignment'].deadline,
         r['status_label'], r['score'], r['result_at'], r['attempts_used'],
         r['assignment'].attempts_allowed, r['assignment'].passing_score,
+        r['result_source'], r['recorded_at'],
     ] for r in data['rows']))
     add_sheet(book, 'Вопросы', [
         'Отделение', 'Версия теста', 'Вопрос', 'Ответов', 'Верно', 'Неверно',
